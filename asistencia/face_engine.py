@@ -107,3 +107,17 @@ class Gallery:
         if similarities[best] < threshold:
             return None
         return self._students[int(self._owners[best])]
+
+    def best_match(
+        self, samples: Sequence[Sequence[float]], threshold: float
+    ) -> Student | None:
+        """Estudiante más parecido a cualquiera de las muestras, o None."""
+        if self._matrix.shape[0] == 0 or not samples:
+            return None
+        vectors = np.asarray(samples, dtype=np.float32)
+        vectors = vectors / np.linalg.norm(vectors, axis=1, keepdims=True)
+        similarities = vectors @ self._matrix.T
+        _, column = np.unravel_index(np.argmax(similarities), similarities.shape)
+        if similarities.max() < threshold:
+            return None
+        return self._students[int(self._owners[column])]

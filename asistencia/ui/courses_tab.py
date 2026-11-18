@@ -6,7 +6,7 @@ import tkinter as tk
 from dataclasses import replace
 from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
-from typing import Callable
+from typing import Callable, Sequence
 
 from ..attendance import AttendanceBook
 from ..config import (
@@ -16,6 +16,7 @@ from ..config import (
     COLOR_SUCCESS,
 )
 from ..errors import AttendanceError, CameraError, ValidationError
+from ..face_engine import Gallery
 from ..models import Course, Student
 from .dialogs import NameDialog, RegistrationDialog, SlotDialog
 from .state import AppState
@@ -335,8 +336,21 @@ class CoursesTab(ttk.Frame):
             camera,
             course.name,
             lambda cedula: cedula in taken,
+            self._find_duplicate_face,
             self._student_saved,
         )
+
+    def _find_duplicate_face(
+        self, cedula: str, samples: Sequence[Sequence[float]]
+    ) -> Student | None:
+        """Busca el rostro en TODOS los cursos; la misma cédula no cuenta como duplicado."""
+        others = tuple(
+            student
+            for course in self._state.repository.courses
+            for student in course.students
+            if student.student_id != cedula
+        )
+        return Gallery(others).best_match(samples, self._state.settings.threshold)
 
     def _student_saved(self, student: Student) -> None:
         updated = self._save_update(lambda course: course.add_student(student))

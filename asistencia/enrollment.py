@@ -17,10 +17,12 @@ from .config import (
     SCAN_TIMEOUT_SECONDS,
 )
 
-SAY_START = "Mire fijamente a la cámara hasta que su rostro quede registrado."
+SAY_APPROACH = "Acerque su cara a la cámara, por favor."
 SAY_REMIND = "Por favor, mire fijamente a la cámara."
-SAY_DONE = "Rostro registrado. Registro confirmado."
+SAY_DONE = "Rostro registrado."
+SAY_DUPLICATE = "Este rostro ya está registrado. No se creó un registro nuevo."
 SAY_FAIL = "No se pudo registrar el rostro. Intente de nuevo."
+TEXT_APPROACH = "Acerque su cara a la cámara"
 TEXT_LOOK = "Mire fijamente a la cámara"
 TEXT_FIND_FACE = "Ubique su rostro frente a la cámara"
 TEXT_FRONTAL = "Mire de frente a la cámara"
@@ -80,7 +82,7 @@ class FaceEnrollment:
         return min(1.0, len(self._samples) / MAX_SAMPLES)
 
     def begin(self) -> EnrollmentStatus:
-        return EnrollmentStatus(Phase.SCAN, TEXT_LOOK, 0.0, speak=SAY_START)
+        return EnrollmentStatus(Phase.SCAN, TEXT_LOOK, 0.0)
 
     def update(self, frame: np.ndarray, faces: np.ndarray) -> EnrollmentStatus:
         if self._phase is Phase.DONE:
@@ -109,5 +111,5 @@ class FaceEnrollment:
             self._last_activity = now
         if len(self._samples) >= MAX_SAMPLES:
             self._phase = Phase.DONE
-            return EnrollmentStatus(Phase.DONE, TEXT_DONE, 1.0, speak=SAY_DONE, box=box)
+            return EnrollmentStatus(Phase.DONE, TEXT_DONE, 1.0, box=box)
         return EnrollmentStatus(Phase.SCAN, TEXT_LOOK, self.progress, speak=speak, box=box)

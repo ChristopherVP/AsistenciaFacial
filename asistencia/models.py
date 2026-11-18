@@ -1,16 +1,11 @@
 from __future__ import annotations
 
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, replace
 from datetime import date, datetime, time
-from typing import TYPE_CHECKING
 
 from .config import DAY_LABELS, TIME_PATTERN
 from .errors import ValidationError
 from .validators import name_sort_key
-
-if TYPE_CHECKING:
-    from PIL import Image
-
 
 def parse_time(text: str) -> time:
     match = TIME_PATTERN.match(text)
@@ -146,7 +141,7 @@ class CameraInfo:
     index: int
     name: str
     kind: str = "unknown"
-    snapshot: Image.Image | None = field(default=None, compare=False, hash=False, repr=False)
+    available: bool = True
 
     @property
     def is_integrated(self) -> bool:

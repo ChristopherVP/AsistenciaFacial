@@ -2,13 +2,13 @@ from __future__ import annotations
 
 import tkinter as tk
 from dataclasses import replace
-from tkinter import ttk
+from tkinter import messagebox, ttk
 
-from PIL import ImageTk
-
-from ..camera import detect_cameras
+from ..camera import Camera, detect_cameras
 from ..config import (
+    APP_TITLE,
     COLOR_BORDER,
+    COLOR_DANGER,
     COLOR_MUTED,
     COLOR_PRIMARY,
     COLOR_SUCCESS,
@@ -16,7 +16,9 @@ from ..config import (
     NOTICE_MS,
     PRECISION_LEVELS,
 )
+from ..errors import CameraError
 from ..models import CameraInfo
+from .camera_preview import CameraPreviewDialog
 from .state import AppState
 from .widgets import Card
 
@@ -27,7 +29,6 @@ class SettingsTab(ttk.Frame):
         self._state = state
         self._cameras: tuple[CameraInfo, ...] = ()
         self._selected: CameraInfo | None = None
-        self._photos: list[ImageTk.PhotoImage] = []
         self._cards: list[tuple[CameraInfo, tk.Frame, tk.Label]] = []
         self._camera_status_var = tk.StringVar(value="Buscando cámaras…")
         self._save_status_var = tk.StringVar()
@@ -47,8 +48,8 @@ class SettingsTab(ttk.Frame):
         )
         ttk.Label(
             camera_card.body,
-            text="Elija la cámara que usará el programa. Compare la imagen de cada tarjeta "
-            "para reconocer cuál es su webcam.",
+            text="Elija la cámara que usará el programa. Pulse «Probar cámara» para ver en vivo "
+            "cuál está grabando antes de elegirla.",
             style="Hint.TLabel",
             wraplength=900,
         ).pack(anchor="w", pady=(4, 10))
@@ -106,17 +107,19 @@ class SettingsTab(ttk.Frame):
                 "de escritorio accedan a la cámara» activados. Luego pulse Buscar cámaras."
             )
             return
+        usable = [info for info in cameras if info.available]
         saved = next(
             (
                 info
-                for info in cameras
+                for info in usable
                 if (settings.camera_name and info.name == settings.camera_name)
                 or (not settings.camera_name and info.index == settings.camera_index)
             ),
             None,
         )
-        others = [info for info in cameras if not info.is_integrated]
-        self._selected = saved or (others[0] if len(others) == 1 else cameras[-1])
+        others = [info for info in usable if not info.is_integrated]
+        fallback = others[0] if len(others) == 1 else (usable[-1] if usable else None)
+        self._selected = saved or fallback
         self._render_cards()
         note = ""
         if all(info.name.startswith("Cámara ") for info in cameras):
@@ -124,41 +127,63 @@ class SettingsTab(ttk.Frame):
                 " Para ver los nombres reales de las cámaras instale: python -m pip install pygrabber"
             )
         self._camera_status_var.set(
-            f"Se detectaron {len(cameras)} cámara(s). La seleccionada está marcada «EN USO»; "
-            f"pulse «Guardar ajustes» para confirmar.{note}"
+            f"Se encontraron {len(cameras)} cámara(s): "
+            f"{', '.join(info.name for info in cameras)}. "
+            f"La elegida dice «EN USO»; pulse «Guardar ajustes» para confirmar.{note}"
         )
 
     def _render_cards(self) -> None:
         for child in self._cards_frame.winfo_children():
             child.destroy()
-        self._photos = []
         self._cards = []
         for column, info in enumerate(self._cameras):
             card = tk.Frame(
-                self._cards_frame, bg="white", highlightthickness=3, highlightbackground=COLOR_BORDER, cursor="hand2"
+                self._cards_frame, bg="white", highlightthickness=3, highlightbackground=COLOR_BORDER
             )
             card.grid(row=0, column=column, padx=(0, 12), sticky="n")
-            if info.snapshot is not None:
-                photo = ImageTk.PhotoImage(info.snapshot)
-                self._photos.append(photo)
-                picture = tk.Label(card, image=photo, bg="white")
-            else:
-                picture = tk.Label(card, text="Sin imagen", bg="#111111", fg="white", width=28, height=9)
-            picture.pack(padx=6, pady=(6, 4))
             name = tk.Label(
-                card, text=info.name, bg="white", fg="#1B2631", font=(FONT_FAMILY, 10, "bold"), wraplength=210
+                card, text=info.name, bg="white", fg="#1B2631", font=(FONT_FAMILY, 11, "bold"),
+                wraplength=220, width=24, justify="center",
             )
-            name.pack()
-            if info.is_integrated:
-                tk.Label(
-                    card, text="Cámara integrada de la laptop", bg="white", fg=COLOR_MUTED, font=(FONT_FAMILY, 9)
-                ).pack()
+            name.pack(padx=8, pady=(10, 2))
+            kind = "Cámara integrada de la laptop" if info.is_integrated else f"Dispositivo {info.index}"
+            tk.Label(card, text=kind, bg="white", fg=COLOR_MUTED, font=(FONT_FAMILY, 9)).pack()
+            status_text, status_color = (
+                ("● Disponible", COLOR_SUCCESS)
+                if info.available
+                else ("● No disponible (en uso por otra app)", COLOR_DANGER)
+            )
+            tk.Label(
+                card, text=status_text, bg="white", fg=status_color, font=(FONT_FAMILY, 9, "bold"),
+                wraplength=220,
+            ).pack(pady=(4, 6))
+            test = ttk.Button(
+                card,
+                text="▶  Probar cámara",
+                style="Ghost.TButton",
+                command=lambda item=info: self._preview(item),
+                state="normal" if info.available else "disabled",
+            )
+            test.pack(padx=10)
             badge = tk.Label(card, text="", font=(FONT_FAMILY, 9, "bold"), padx=10, pady=3)
-            badge.pack(pady=(6, 8))
+            badge.pack(pady=(8, 10))
             self._cards.append((info, card, badge))
-            for widget in (card, picture, name, badge):
-                widget.bind("<Button-1>", lambda _event, item=info: self._select(item))
+            if info.available:
+                for widget in (card, name, badge):
+                    widget.configure(cursor="hand2")
+                    widget.bind("<Button-1>", lambda _event, item=info: self._select(item))
         self._restyle_cards()
+
+    def _preview(self, info: CameraInfo) -> None:
+        if self._state.session_active:
+            self._camera_status_var.set("Finalice la lista en curso antes de probar una cámara.")
+            return
+        try:
+            camera = Camera(info.index)
+        except CameraError as error:
+            messagebox.showerror(APP_TITLE, str(error))
+            return
+        CameraPreviewDialog(self, info, camera, self._select)
 
     def _select(self, info: CameraInfo) -> None:
         self._selected = info
@@ -170,8 +195,10 @@ class SettingsTab(ttk.Frame):
             card.configure(highlightbackground=COLOR_PRIMARY if chosen else COLOR_BORDER)
             if chosen:
                 badge.configure(text="✔  EN USO", bg=COLOR_SUCCESS, fg="white")
-            else:
+            elif info.available:
                 badge.configure(text="Usar esta cámara", bg="#EEF2F6", fg="#1B2631")
+            else:
+                badge.configure(text="No disponible", bg="#EEF2F6", fg=COLOR_MUTED)
 
     def _show_saved(self, message: str) -> None:
         if self._save_job is not None:

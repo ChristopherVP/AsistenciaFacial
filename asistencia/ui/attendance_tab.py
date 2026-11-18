@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import csv
 import tkinter as tk
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from datetime import date, datetime, timedelta
 from pathlib import Path
 from tkinter import messagebox, ttk
@@ -42,6 +42,24 @@ NOTICE_COLORS = {
 GRAY = "#7F8C8D"
 
 
+@dataclass(frozen=True)
+class ListSnapshot:
+    """Resultado de UNA lista: solo los estudiantes que estaban en ese momento."""
+
+    course_id: str
+    moment: datetime
+    roster_ids: frozenset[str]
+    present: dict[str, datetime]
+
+    @property
+    def present_count(self) -> int:
+        return len(self.roster_ids & self.present.keys())
+
+    @property
+    def absent_count(self) -> int:
+        return len(self.roster_ids) - self.present_count
+
+
 class AttendanceTab(ttk.Frame):
     def __init__(self, parent: tk.Misc, state: AppState) -> None:
         super().__init__(parent, padding=14)
@@ -57,7 +75,7 @@ class AttendanceTab(ttk.Frame):
         self._read_failures = 0
         self._loop_id: str | None = None
         self._notice_job: str | None = None
-        self._final: tuple[str, dict[str, datetime]] | None = None
+        self._final: ListSnapshot | None = None
         self._auto_attempts: set[tuple[str, str]] = set()
         self._course_ids: dict[str, str] = {}
         self._course_var = tk.StringVar()
@@ -188,8 +206,8 @@ class AttendanceTab(ttk.Frame):
         if self._session is not None and self._course is not None:
             return self._course, self._session.present, "live"
         course = self._selected_course()
-        if course is not None and self._final is not None and self._final[0] == course.course_id:
-            return course, self._final[1], "final"
+        if course is not None and self._final is not None and self._final.course_id == course.course_id:
+            return course, self._final.present, "final"
         return course, {}, "idle"
 
     def _render_roster(self) -> None:
@@ -199,9 +217,12 @@ class AttendanceTab(ttk.Frame):
             for stat in (self._present_stat, self._absent_stat, self._total_stat):
                 stat.set("–")
             return
+        final = self._final if mode == "final" else None
         for number, student in enumerate(course.students, start=1):
             moment = present.get(student.student_id)
-            if moment is not None:
+            if final is not None and student.student_id not in final.roster_ids:
+                values, tag = ("Nuevo", "–"), "waiting"  # se registró después de esa lista
+            elif moment is not None:
                 values, tag = ("Presente", f"{moment:%H:%M:%S}"), "present"
             elif mode == "final":
                 values, tag = ("Falta", "–"), "absent"
@@ -214,11 +235,14 @@ class AttendanceTab(ttk.Frame):
         if mode == "idle":
             self._present_stat.set("–", "Presentes")
             self._absent_stat.set("–", "Sin registrar")
+        elif final is not None:
+            # Cifras de esa lista, no del curso actual: nunca dan negativos.
+            self._present_stat.set(str(final.present_count), "Presentes")
+            self._absent_stat.set(str(final.absent_count), "Faltas")
+            total = len(final.roster_ids)
         else:
             self._present_stat.set(str(len(present)), "Presentes")
-            self._absent_stat.set(
-                str(total - len(present)), "Faltas" if mode == "final" else "Sin registrar"
-            )
+            self._absent_stat.set(str(total - len(present)), "Sin registrar")
         self._total_stat.set(str(total))
 
     @staticmethod
@@ -379,14 +403,19 @@ class AttendanceTab(ttk.Frame):
         set_chip(self._chip, "GUARDANDO", COLOR_WARNING)
         self.update_idletasks()
         present = session.present
-        self._final = (course.course_id, present)
+        self._final = ListSnapshot(
+            course_id=course.course_id,
+            moment=datetime.now(),
+            roster_ids=frozenset(student.student_id for student in course.students),
+            present=present,
+        )
         result = self._finalize(course, column, frozenset(present))
         if result is None:
             self._status_var.set("Lista no guardada en Excel")
             set_chip(self._chip, "ERROR", COLOR_DANGER)
             self._show_notice("La lista no se guardó en el Excel", "error", NOTICE_MS * 2)
         else:
-            self._status_var.set(f"Lista guardada · {course.name}")
+            self._status_var.set(f"Lista guardada · {course.name} · {self._final.moment:%d/%m/%Y %H:%M}")
             set_chip(self._chip, "FINALIZADA", GRAY)
             self._show_notice(
                 f"Lista guardada · Presentes {result.present} · Faltas {result.total - result.present} · "

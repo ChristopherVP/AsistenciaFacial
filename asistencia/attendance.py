@@ -19,6 +19,11 @@ from .models import FaceResult, RecordResult, Student
 from .validators import name_sort_key
 
 
+PERCENT_HEADER = "% Asistencia"
+PERCENT_COLUMN = 3
+FIRST_DATE_COLUMN = 4
+
+
 class AttendanceSession:
     def __init__(self, engine: FaceEngine, gallery: Gallery, threshold: float) -> None:
         self._engine = engine
@@ -110,21 +115,31 @@ class AttendanceBook:
         sheet = workbook.active
         if is_new:
             sheet.title = self._sheet_title
-        for column, title in ((1, "Cédula"), (2, "Apellidos y nombres")):
+        elif sheet.cell(1, PERCENT_COLUMN).value not in (None, PERCENT_HEADER):
+            # Excel anterior: la columna C era la primera fecha; se desplaza a la derecha.
+            sheet.insert_cols(PERCENT_COLUMN)
+        for column, title in (
+            (1, "Cédula"),
+            (2, "Apellidos y nombres"),
+            (PERCENT_COLUMN, PERCENT_HEADER),
+        ):
             cell = sheet.cell(1, column)
-            if cell.value in (None, ""):
+            if cell.value in (None, "") or column == PERCENT_COLUMN:
                 cell.value = title
             self._style_header(cell)
         sheet.column_dimensions["A"].width = 16
         sheet.column_dimensions["B"].width = 38
-        sheet.freeze_panes = "C2"
+        sheet.column_dimensions["C"].width = 15
+        for column in range(FIRST_DATE_COLUMN, sheet.max_column + 1):
+            sheet.column_dimensions[get_column_letter(column)].width = 18
+        sheet.freeze_panes = "D2"
         return workbook, sheet
 
     def _last_header_column(self, sheet) -> int:
         column = sheet.max_column
-        while column > 2 and sheet.cell(1, column).value in (None, ""):
+        while column > PERCENT_COLUMN and sheet.cell(1, column).value in (None, ""):
             column -= 1
-        return max(column, 2)
+        return max(column, PERCENT_COLUMN)
 
     def _student_rows(self, sheet) -> dict[str, int]:
         rows: dict[str, int] = {}
@@ -148,7 +163,7 @@ class AttendanceBook:
             values = ordered[offset] if offset < len(ordered) else [None] * last_column
             for column, value in enumerate(values, start=1):
                 sheet.cell(row, column).value = value
-                if column >= 3 and offset < len(ordered):
+                if column >= FIRST_DATE_COLUMN and offset < len(ordered):
                     sheet.cell(row, column).alignment = Alignment(horizontal="center")
 
     def _with_students(self, sheet, students: Sequence[Student]) -> dict[str, int]:
@@ -168,7 +183,19 @@ class AttendanceBook:
         self._sort_rows(sheet)
         return self._student_rows(sheet)
 
-    def _save(self, workbook) -> None:
+    def _apply_percent(self, sheet) -> None:
+        """% = listas con asistencia / listas en las que el estudiante estaba.
+        Las celdas vacías (listas anteriores a su ingreso) no cuentan."""
+        for row in self._student_rows(sheet).values():
+            span = f"{get_column_letter(FIRST_DATE_COLUMN)}{row}:XFD{row}"
+            cell = sheet.cell(row, PERCENT_COLUMN)
+            cell.value = f'=IF(COUNT({span})=0,"",SUM({span})/COUNT({span}))'
+            cell.number_format = "0%"
+            cell.font = Font(bold=True)
+            cell.alignment = Alignment(horizontal="center")
+
+    def _save(self, workbook, sheet) -> None:
+        self._apply_percent(sheet)
         try:
             workbook.save(self._path)
         except PermissionError as error:
@@ -181,7 +208,7 @@ class AttendanceBook:
     def sync_students(self, students: Sequence[Student]) -> None:
         workbook, sheet = self._load()
         self._with_students(sheet, students)
-        self._save(workbook)
+        self._save(workbook, sheet)
 
     def start_list(self, moment: datetime, students: Sequence[Student]) -> int:
         workbook, sheet = self._load()
@@ -191,10 +218,13 @@ class AttendanceBook:
         header.number_format = self.HEADER_FORMAT
         self._style_header(header)
         sheet.column_dimensions[get_column_letter(column)].width = 18
-        for row in rows.values():
+        roster = {student.student_id for student in students}
+        for student_id, row in rows.items():
+            if student_id not in roster:
+                continue
             cell = sheet.cell(row, column, 0)
             cell.alignment = Alignment(horizontal="center")
-        self._save(workbook)
+        self._save(workbook, sheet)
         return column
 
     def mark_present(self, column: int, student_id: str) -> None:
@@ -204,16 +234,19 @@ class AttendanceBook:
             raise AttendanceError(f"La cédula {student_id} no está en el Excel.")
         cell = sheet.cell(row, column, 1)
         cell.alignment = Alignment(horizontal="center")
-        self._save(workbook)
+        self._save(workbook, sheet)
 
     def finalize(
         self, column: int, present_ids: frozenset[str], students: Sequence[Student]
     ) -> RecordResult:
         workbook, sheet = self._load()
         rows = self._with_students(sheet, students)
+        roster = {student.student_id for student in students}
         for student_id, row in rows.items():
+            if student_id not in roster:
+                continue
             cell = sheet.cell(row, column, 1 if student_id in present_ids else 0)
             cell.alignment = Alignment(horizontal="center")
-        self._save(workbook)
-        present = sum(1 for student_id in rows if student_id in present_ids)
-        return RecordResult(get_column_letter(column), present, len(rows))
+        self._save(workbook, sheet)
+        present = len(roster & present_ids)
+        return RecordResult(get_column_letter(column), present, len(roster))

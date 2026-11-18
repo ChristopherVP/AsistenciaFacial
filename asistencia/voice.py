@@ -25,6 +25,10 @@ class Speaker:
     def available(self) -> bool:
         return self._available
 
+    @property
+    def is_speaking(self) -> bool:
+        return self._process is not None and self._process.poll() is None
+
     def speak(self, text: str) -> bool:
         if not self._available:
             return False

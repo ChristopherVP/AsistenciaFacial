@@ -21,7 +21,15 @@ from ..config import (
     FRAME_DELAY_MS,
     VIEW_WIDTH,
 )
-from ..enrollment import EnrollmentStatus, FaceEnrollment, Phase
+from ..enrollment import (
+    SAY_APPROACH,
+    SAY_DONE,
+    SAY_DUPLICATE,
+    TEXT_APPROACH,
+    EnrollmentStatus,
+    FaceEnrollment,
+    Phase,
+)
 from ..errors import ValidationError
 from ..face_engine import FaceEngine
 from ..models import FaceResult, Slot, Student, parse_time
@@ -38,6 +46,11 @@ BLUE = (46, 134, 193)
 GREEN = (46, 139, 87)
 RED = (176, 58, 46)
 GRAY = "#7F8C8D"
+SPEECH_MIN_SECONDS = 1.5
+SPEECH_TIMEOUT_SECONDS = 9.0
+SPEECH_POLL_MS = 100
+
+DuplicateFinder = Callable[[str, tuple[tuple[float, ...], ...]], Student | None]
 
 
 def build_header(window: tk.Misc, title: str, subtitle: str) -> tk.Frame:
@@ -59,6 +72,7 @@ class RegistrationDialog(tk.Toplevel):
         camera: Camera,
         course_name: str,
         is_taken: Callable[[str], bool],
+        find_duplicate: DuplicateFinder,
         on_saved: Callable[[Student], None],
     ) -> None:
         super().__init__(parent)
@@ -69,6 +83,7 @@ class RegistrationDialog(tk.Toplevel):
         self._camera = camera
         self._course_name = course_name
         self._is_taken = is_taken
+        self._find_duplicate = find_duplicate
         self._on_saved = on_saved
         self._speaker = Speaker()
         self._voice_warned = False
@@ -235,7 +250,32 @@ class RegistrationDialog(tk.Toplevel):
         self._set_fields_enabled(False)
         self._stepper.set_active(1)
         set_chip(self._chip, "ESCANEANDO", COLOR_ACCENT)
-        self._set_hint("Escaneo en curso. Siga las indicaciones de voz y de la pantalla.")
+        self._set_hint("Escuche la indicación y acerque su rostro a la cámara.")
+        self._banner = (TEXT_APPROACH.upper(), BLUE)
+        self._say(SAY_APPROACH)
+        self._after_speech(self._begin_scan)
+
+    def _after_speech(
+        self,
+        then: Callable[[], None],
+        minimum: float = SPEECH_MIN_SECONDS,
+        started: float | None = None,
+    ) -> None:
+        """Ejecuta `then` cuando la voz termina de hablar (o tras un tiempo máximo)."""
+        if self._closed:
+            return
+        started = time.monotonic() if started is None else started
+        elapsed = time.monotonic() - started
+        finished = not self._speaker.is_speaking and elapsed >= minimum
+        if finished or elapsed >= SPEECH_TIMEOUT_SECONDS:
+            then()
+            return
+        self.after(SPEECH_POLL_MS, lambda: self._after_speech(then, minimum, started))
+
+    def _begin_scan(self) -> None:
+        if self._closed:
+            return
+        self._set_hint("Escaneo en curso. Mire fijamente a la cámara.")
         self._enrollment = FaceEnrollment(self._engine)
         self._apply_status(self._enrollment.begin())
 
@@ -277,6 +317,10 @@ class RegistrationDialog(tk.Toplevel):
         if enrollment is None or self._identity is None:
             return
         cedula, name = self._identity
+        duplicate = self._find_duplicate(cedula, enrollment.samples)
+        if duplicate is not None:
+            self._reject_duplicate(duplicate)
+            return
         try:
             self._on_saved(Student(cedula, name, enrollment.samples))
         except ValidationError as error:
@@ -294,7 +338,21 @@ class RegistrationDialog(tk.Toplevel):
         self._summary_course.configure(text=f"Curso: {self._course_name}")
         self._form.pack_forget()
         self._summary.pack(fill="both", expand=True)
-        self.after(2400, self._close)
+        self._say(SAY_DONE)
+        self._after_speech(self._close, minimum=2.0)
+
+    def _reject_duplicate(self, other: Student) -> None:
+        self._banner = ("ROSTRO YA REGISTRADO", RED)
+        set_chip(self._chip, "DUPLICADO", COLOR_DANGER)
+        self._stepper.set_active(0)
+        self._set_hint(
+            f"Este rostro ya parece estar registrado como {other.name} "
+            f"(cédula {other.student_id}). No se creó un registro nuevo.",
+            True,
+        )
+        self._say(SAY_DUPLICATE)
+        self._start_button.configure(text="🔁  Reintentar escaneo")
+        self._set_fields_enabled(True)
 
     def _finish_failure(self, status: EnrollmentStatus) -> None:
         self._enrollment = None

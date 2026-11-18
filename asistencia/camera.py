@@ -27,7 +27,6 @@ INTEGRATED_HINTS = (
     "surface camera",
     "integrada",
 )
-SNAPSHOT_SIZE = (220, 165)
 CYAN = (0, 220, 255)
 
 Banner = tuple[str, tuple[int, int, int]]
@@ -95,28 +94,29 @@ def classify_camera(name: str) -> str:
     return "integrated" if any(hint in lowered for hint in INTEGRATED_HINTS) else "unknown"
 
 
-def make_snapshot(frame: np.ndarray) -> Image.Image:
-    image = Image.fromarray(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
-    return image.resize(SNAPSHOT_SIZE, Image.Resampling.LANCZOS)
+def _delivers_frames(index: int) -> bool:
+    try:
+        camera = Camera(index)
+    except CameraError:
+        return False
+    try:
+        return any(camera.read() is not None for _ in range(8))
+    finally:
+        camera.release()
 
 
 def detect_cameras() -> tuple[CameraInfo, ...]:
+    """Lista las cámaras por nombre. Con nombres reales (pygrabber) también
+    muestra las que no se pudieron abrir, marcadas como no disponibles."""
     names = device_names()
     candidates = len(names) if names else MAX_CAMERA_INDEX
     found: list[CameraInfo] = []
     for index in range(candidates):
-        try:
-            camera = Camera(index)
-        except CameraError:
-            continue
-        frame = None
-        for _ in range(8):
-            frame = camera.read()
-        camera.release()
-        if frame is None:
-            continue
         name = names[index] if index < len(names) else f"Cámara {index}"
-        found.append(CameraInfo(index, name, classify_camera(name), make_snapshot(frame)))
+        available = _delivers_frames(index)
+        if not available and not names:
+            continue
+        found.append(CameraInfo(index, name, classify_camera(name), available))
     return tuple(found)
 
 
