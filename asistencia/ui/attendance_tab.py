@@ -12,7 +12,7 @@ from ..camera import Camera, render_frame
 from ..config import (
     APP_TITLE,
     BACKUP_DIR,
-    COLOR_BG,
+    COLOR_ACCENT,
     COLOR_DANGER,
     COLOR_MUTED,
     COLOR_PRIMARY,
@@ -20,17 +20,18 @@ from ..config import (
     COLOR_WARNING,
     FONT_FAMILY,
     FRAME_DELAY_MS,
+    MANUAL_SESSION_MINUTES,
     MAX_READ_FAILURES,
     NOTICE_MS,
     PROCESS_EVERY_N_FRAMES,
     VIEW_WIDTH,
 )
-from ..errors import AlreadyTakenError, AttendanceError, CameraError
+from ..errors import AttendanceError, CameraError
 from ..face_engine import Gallery
 from ..models import Course, FaceResult, RecordResult, Slot, parse_time
 from ..scheduler import describe_next, due_courses
 from .state import AppState
-from .widgets import CameraView
+from .widgets import Card, CameraView, StatCard, Table, make_chip, set_chip
 
 NOTICE_COLORS = {
     "success": COLOR_SUCCESS,
@@ -38,6 +39,7 @@ NOTICE_COLORS = {
     "info": COLOR_PRIMARY,
     "error": COLOR_DANGER,
 }
+GRAY = "#7F8C8D"
 
 
 class AttendanceTab(ttk.Frame):
@@ -47,20 +49,21 @@ class AttendanceTab(ttk.Frame):
         self._session: AttendanceSession | None = None
         self._course: Course | None = None
         self._camera: Camera | None = None
+        self._column: int | None = None
+        self._live_failed = False
         self._session_end = datetime.now()
-        self._replace_existing = False
         self._results: tuple[FaceResult, ...] = ()
         self._frame_count = 0
         self._read_failures = 0
         self._loop_id: str | None = None
         self._notice_job: str | None = None
+        self._final: tuple[str, dict[str, datetime]] | None = None
         self._auto_attempts: set[tuple[str, str]] = set()
         self._course_ids: dict[str, str] = {}
         self._course_var = tk.StringVar()
         self._status_var = tk.StringVar()
         self._timer_var = tk.StringVar()
         self._next_var = tk.StringVar()
-        self._count_var = tk.StringVar()
         self._build()
         state.subscribe(self.refresh_courses)
         self.refresh_courses()
@@ -70,12 +73,18 @@ class AttendanceTab(ttk.Frame):
         return self._session is not None
 
     def _build(self) -> None:
-        left = ttk.Frame(self)
-        left.grid(row=0, column=0, sticky="n")
+        self.columnconfigure(1, weight=1)
+        camera_card = Card(self, padding=14)
+        camera_card.grid(row=0, column=0, sticky="n")
+        top = ttk.Frame(camera_card.body, style="Card.TFrame")
+        top.pack(fill="x", pady=(0, 8))
+        ttk.Label(top, text="Cámara en vivo", style="CardTitle.TLabel").pack(side="left")
+        self._chip = make_chip(top, "LISTO", COLOR_ACCENT)
+        self._chip.pack(side="right")
         self._notice = tk.Label(
-            left,
+            camera_card.body,
             text="",
-            bg=COLOR_BG,
+            bg="white",
             fg="white",
             font=(FONT_FAMILY, 12, "bold"),
             anchor="w",
@@ -85,40 +94,54 @@ class AttendanceTab(ttk.Frame):
             wraplength=VIEW_WIDTH - 24,
         )
         self._notice.pack(fill="x", pady=(0, 8))
-        self._view = CameraView(left, "Cámara apagada")
+        self._view = CameraView(camera_card.body, "Cámara apagada")
         self._view.pack()
-        panel = ttk.Frame(self, style="Card.TFrame", padding=16)
-        panel.grid(row=0, column=1, sticky="nsew", padx=(14, 0))
-        self.columnconfigure(1, weight=1)
-        ttk.Label(panel, text="Curso", style="CardTitle.TLabel").pack(anchor="w")
+        right = ttk.Frame(self)
+        right.grid(row=0, column=1, sticky="nsew", padx=(14, 0))
+        info = Card(right)
+        info.pack(fill="x")
+        ttk.Label(info.body, text="Curso", style="CardTitle.TLabel").pack(anchor="w")
         self._course_combo = ttk.Combobox(
-            panel, textvariable=self._course_var, state="readonly", width=34
+            info.body, textvariable=self._course_var, state="readonly", font=(FONT_FAMILY, 11)
         )
-        self._course_combo.pack(fill="x", pady=(2, 10))
+        self._course_combo.pack(fill="x", pady=(2, 8))
         self._course_combo.bind("<<ComboboxSelected>>", lambda _: self._render_roster())
-        ttk.Label(panel, textvariable=self._status_var, style="Status.TLabel", wraplength=340).pack(
+        ttk.Label(info.body, textvariable=self._status_var, style="Status.TLabel", wraplength=380).pack(
             anchor="w"
         )
-        ttk.Label(panel, textvariable=self._timer_var, style="Card.TLabel").pack(
+        ttk.Label(info.body, textvariable=self._timer_var, style="Timer.TLabel").pack(anchor="w")
+        ttk.Label(info.body, textvariable=self._next_var, style="Hint.TLabel", wraplength=380).pack(
             anchor="w", pady=(2, 0)
         )
-        ttk.Label(panel, textvariable=self._next_var, style="Hint.TLabel", wraplength=340).pack(
-            anchor="w", pady=(2, 10)
+        stats = ttk.Frame(right)
+        stats.pack(fill="x", pady=10)
+        for column in range(3):
+            stats.columnconfigure(column, weight=1, uniform="stats")
+        self._present_stat = StatCard(stats, "Presentes", COLOR_SUCCESS)
+        self._absent_stat = StatCard(stats, "Sin registrar", COLOR_DANGER)
+        self._total_stat = StatCard(stats, "Total", COLOR_PRIMARY)
+        for column, card in enumerate((self._present_stat, self._absent_stat, self._total_stat)):
+            card.grid(row=0, column=column, sticky="ew", padx=(0 if column == 0 else 6, 0))
+        roster = Card(right)
+        roster.pack(fill="both", expand=True)
+        ttk.Label(roster.body, text="Lista del curso (A-Z por apellidos)", style="CardTitle.TLabel").pack(
+            anchor="w", pady=(0, 6)
         )
-        ttk.Label(panel, textvariable=self._count_var, style="CardTitle.TLabel").pack(
-            anchor="w", pady=(0, 4)
+        self._table = Table(
+            roster.body,
+            (
+                ("n", "#", 32, "center", False),
+                ("nombre", "Apellidos y nombres", 170, "w", True),
+                ("estado", "Estado", 95, "center", False),
+                ("hora", "Hora", 72, "center", False),
+            ),
+            height=9,
         )
-        self._roster_tree = ttk.Treeview(
-            panel, columns=("nombre", "estado"), show="headings", height=12
-        )
-        self._roster_tree.heading("nombre", text="Apellidos y nombres")
-        self._roster_tree.heading("estado", text="Estado")
-        self._roster_tree.column("nombre", width=250)
-        self._roster_tree.column("estado", width=100, anchor="center", stretch=False)
-        self._roster_tree.tag_configure("present", foreground=COLOR_SUCCESS)
-        self._roster_tree.tag_configure("pending", foreground=COLOR_MUTED)
-        self._roster_tree.pack(fill="both", expand=True)
-        buttons = ttk.Frame(panel, style="Card.TFrame")
+        self._table.tag("present", foreground=COLOR_SUCCESS)
+        self._table.tag("absent", foreground=COLOR_DANGER)
+        self._table.tag("waiting", foreground=COLOR_MUTED)
+        self._table.pack(fill="both", expand=True)
+        buttons = ttk.Frame(roster.body, style="Card.TFrame")
         buttons.pack(fill="x", pady=(12, 0))
         self._start_button = ttk.Button(
             buttons, text="▶  Iniciar lista", style="Success.TButton", command=self._start_manual
@@ -141,7 +164,7 @@ class AttendanceTab(ttk.Frame):
 
     def _clear_notice(self) -> None:
         self._notice_job = None
-        self._notice.configure(text="", bg=COLOR_BG)
+        self._notice.configure(text="", bg="white")
 
     def refresh_courses(self) -> None:
         courses = self._state.repository.courses
@@ -154,30 +177,49 @@ class AttendanceTab(ttk.Frame):
             self._status_var.set(
                 "Listo para tomar lista"
                 if names
-                else "Crea un curso en la pestaña Cursos para empezar"
+                else "Cree un curso en la pestaña Cursos para empezar"
             )
         self._render_roster()
 
     def _selected_course(self) -> Course | None:
         return self._state.repository.get(self._course_ids.get(self._course_var.get()))
 
+    def _roster_context(self) -> tuple[Course | None, dict[str, datetime], str]:
+        if self._session is not None and self._course is not None:
+            return self._course, self._session.present, "live"
+        course = self._selected_course()
+        if course is not None and self._final is not None and self._final[0] == course.course_id:
+            return course, self._final[1], "final"
+        return course, {}, "idle"
+
     def _render_roster(self) -> None:
-        course = self._course if self._session is not None else self._selected_course()
-        present = self._session.present if self._session is not None else {}
-        self._roster_tree.delete(*self._roster_tree.get_children())
+        course, present, mode = self._roster_context()
+        self._table.clear()
         if course is None:
-            self._count_var.set("Presentes: 0 de 0 estudiantes")
+            for stat in (self._present_stat, self._absent_stat, self._total_stat):
+                stat.set("–")
             return
-        for student in course.students:
+        for number, student in enumerate(course.students, start=1):
             moment = present.get(student.student_id)
-            self._roster_tree.insert(
-                "",
-                "end",
-                iid=student.student_id,
-                values=(student.name, f"✔ {moment:%H:%M:%S}" if moment else "Pendiente"),
-                tags=("present" if moment else "pending",),
+            if moment is not None:
+                values, tag = ("Presente", f"{moment:%H:%M:%S}"), "present"
+            elif mode == "final":
+                values, tag = ("Falta", "–"), "absent"
+            elif mode == "live":
+                values, tag = ("Sin registrar", "–"), "waiting"
+            else:
+                values, tag = ("–", "–"), "waiting"
+            self._table.add((number, student.name, *values), iid=student.student_id, tags=(tag,))
+        total = len(course.students)
+        if mode == "idle":
+            self._present_stat.set("–", "Presentes")
+            self._absent_stat.set("–", "Sin registrar")
+        else:
+            self._present_stat.set(str(len(present)), "Presentes")
+            self._absent_stat.set(
+                str(total - len(present)), "Faltas" if mode == "final" else "Sin registrar"
             )
-        self._count_var.set(f"Presentes: {len(present)} de {len(course.students)} estudiantes")
+        self._total_stat.set(str(total))
 
     @staticmethod
     def _book(course: Course) -> AttendanceBook:
@@ -186,24 +228,13 @@ class AttendanceTab(ttk.Frame):
     def _start_manual(self) -> None:
         course = self._selected_course()
         if course is None:
-            self._show_notice("Primero crea un curso en la pestaña Cursos.", "info")
+            self._show_notice("Primero cree un curso en la pestaña Cursos.", "info")
             return
         if not course.students:
             self._show_notice(f"«{course.name}» no tiene estudiantes registrados.", "warning")
             return
-        try:
-            exists = self._book(course).has_date(date.today())
-        except AttendanceError as error:
-            messagebox.showerror(APP_TITLE, str(error))
-            return
-        if exists and not messagebox.askyesno(
-            APP_TITLE,
-            f"Ya existe la lista de hoy de «{course.name}» en el Excel.\n"
-            "¿Tomarla de nuevo y reemplazarla?",
-        ):
-            return
-        end = datetime.now() + timedelta(minutes=self._state.settings.manual_minutes)
-        self._begin(course, end, exists, automatic=False)
+        end = datetime.now() + timedelta(minutes=MANUAL_SESSION_MINUTES)
+        self._begin(course, end, automatic=False)
 
     def _try_auto_start(self, now: datetime) -> None:
         for course, slot in due_courses(self._state.repository.courses, now):
@@ -229,49 +260,64 @@ class AttendanceTab(ttk.Frame):
         if not course.students:
             self._skip_automatic(f"Lista automática omitida: «{course.name}» no tiene estudiantes")
             return
-        try:
-            exists = self._book(course).has_date(now.date())
-        except AttendanceError as error:
-            self._skip_automatic(f"Lista automática omitida: {error}")
-            return
-        if exists:
-            self._skip_automatic(f"Lista automática omitida: «{course.name}» ya tiene la lista de hoy")
-            return
         window = self.winfo_toplevel()
         window.deiconify()
         window.lift()
         window.attributes("-topmost", True)
         window.after(1500, lambda: window.attributes("-topmost", False))
         end = datetime.combine(now.date(), parse_time(slot.end))
-        self._begin(course, end, False, automatic=True)
+        self._begin(course, end, automatic=True)
 
-    def _begin(self, course: Course, end: datetime, replace_existing: bool, automatic: bool) -> None:
+    def _begin(self, course: Course, end: datetime, automatic: bool) -> None:
         try:
             camera = self._state.open_camera()
         except CameraError as error:
-            if automatic:
-                self._skip_automatic(f"Lista automática omitida: {error}")
-            else:
-                messagebox.showerror(APP_TITLE, str(error))
+            self._report_start_error(str(error), automatic)
+            return
+        try:
+            column = self._book(course).start_list(datetime.now(), course.students)
+        except AttendanceError as error:
+            camera.release()
+            self._report_start_error(str(error), automatic)
             return
         self._camera = camera
         self._course = course
+        self._column = column
+        self._live_failed = False
+        self._final = None
         self._session = AttendanceSession(
             self._state.engine, Gallery(course.students), self._state.settings.threshold
         )
         self._session_end = end
-        self._replace_existing = replace_existing
         self._results = ()
         self._frame_count = 0
         self._read_failures = 0
         self._state.session_active = True
         self._course_combo.configure(state="disabled")
-        self._status_var.set(f"Tomando lista: {course.name}")
+        self._status_var.set(f"Tomando lista · {course.name}")
+        set_chip(self._chip, "EN CURSO", COLOR_SUCCESS)
         self._start_button.configure(state="disabled")
         self._stop_button.configure(state="normal")
         self._show_notice("Cámara activa: acérquese para registrarse", "info")
         self._render_roster()
         self._frame_loop()
+
+    def _report_start_error(self, message: str, automatic: bool) -> None:
+        if automatic:
+            self._skip_automatic(f"Lista automática omitida: {message}")
+        else:
+            messagebox.showerror(APP_TITLE, message)
+
+    def _mark_live(self, student_id: str) -> None:
+        if self._live_failed or self._column is None or self._course is None:
+            return
+        try:
+            self._book(self._course).mark_present(self._column, student_id)
+        except AttendanceError:
+            self._live_failed = True
+            self._show_notice(
+                "Excel abierto: la asistencia se guardará al finalizar la lista", "warning", NOTICE_MS * 2
+            )
 
     def _handle_events(self, events: tuple[tuple[str, str], ...]) -> None:
         if not events or self._course is None:
@@ -282,6 +328,7 @@ class AttendanceTab(ttk.Frame):
             name = names.get(student_id, student_id)
             if kind == "registered":
                 self._show_notice(f"✔  {name}  registrado", "success")
+                self._mark_live(student_id)
                 registered = True
             else:
                 self._show_notice(f"ℹ  {name}  ya está registrado", "warning")
@@ -310,11 +357,12 @@ class AttendanceTab(ttk.Frame):
         self._loop_id = self.after(FRAME_DELAY_MS, self._frame_loop)
 
     def finish_session(self) -> None:
-        session, course = self._session, self._course
-        if session is None or course is None:
+        session, course, column = self._session, self._course, self._column
+        if session is None or course is None or column is None:
             return
         self._session = None
         self._course = None
+        self._column = None
         if self._loop_id is not None:
             self.after_cancel(self._loop_id)
             self._loop_id = None
@@ -328,51 +376,44 @@ class AttendanceTab(ttk.Frame):
         self._start_button.configure(state="normal")
         self._stop_button.configure(state="disabled")
         self._status_var.set("Guardando lista…")
+        set_chip(self._chip, "GUARDANDO", COLOR_WARNING)
         self.update_idletasks()
-        result = self._save_attendance(course, frozenset(session.present))
+        present = session.present
+        self._final = (course.course_id, present)
+        result = self._finalize(course, column, frozenset(present))
         if result is None:
             self._status_var.set("Lista no guardada en Excel")
+            set_chip(self._chip, "ERROR", COLOR_DANGER)
             self._show_notice("La lista no se guardó en el Excel", "error", NOTICE_MS * 2)
         else:
-            self._status_var.set(f"Lista de «{course.name}» guardada")
+            self._status_var.set(f"Lista guardada · {course.name}")
+            set_chip(self._chip, "FINALIZADA", GRAY)
             self._show_notice(
-                f"Lista guardada · Presentes {result.present} de {result.total} · "
+                f"Lista guardada · Presentes {result.present} · Faltas {result.total - result.present} · "
                 f"columna {result.column_letter}",
                 "success",
                 NOTICE_MS * 2,
             )
         self._render_roster()
 
-    def _save_attendance(self, course: Course, present_ids: frozenset[str]) -> RecordResult | None:
-        day = date.today()
-        replace_existing = self._replace_existing
+    def _finalize(self, course: Course, column: int, present_ids: frozenset[str]) -> RecordResult | None:
         while True:
             try:
-                return self._book(course).record(
-                    day, present_ids, course.students, replace_existing
-                )
-            except AlreadyTakenError:
-                if messagebox.askyesno(
-                    APP_TITLE,
-                    f"Ya existe una lista de hoy de «{course.name}».\n¿Reemplazarla con esta?",
-                ):
-                    replace_existing = True
-                    continue
-                self._write_backup(course, day, present_ids)
-                return None
+                return self._book(course).finalize(column, present_ids, course.students)
             except AttendanceError as error:
                 if messagebox.askretrycancel("No se pudo guardar", f"{error}\n\n¿Reintentar?"):
                     continue
-                self._write_backup(course, day, present_ids)
+                self._write_backup(course, present_ids)
                 return None
 
-    def _write_backup(self, course: Course, day: date, present_ids: frozenset[str]) -> None:
-        target = BACKUP_DIR / f"lista_{course.course_id}_{day:%Y-%m-%d}_{datetime.now():%H%M%S}.csv"
+    def _write_backup(self, course: Course, present_ids: frozenset[str]) -> None:
+        moment = datetime.now()
+        target = BACKUP_DIR / f"lista_{course.course_id}_{moment:%Y-%m-%d_%H%M%S}.csv"
         try:
             BACKUP_DIR.mkdir(parents=True, exist_ok=True)
             with target.open("w", newline="", encoding="utf-8-sig") as handle:
                 writer = csv.writer(handle)
-                writer.writerow(["Cédula", "Apellidos y nombres", day.isoformat()])
+                writer.writerow(["Cédula", "Apellidos y nombres", date.today().isoformat()])
                 for student in course.students:
                     writer.writerow(
                         [student.student_id, student.name, 1 if student.student_id in present_ids else 0]
@@ -394,4 +435,4 @@ class AttendanceTab(ttk.Frame):
             self.finish_session()
             return
         minutes, seconds = divmod(remaining, 60)
-        self._timer_var.set(f"Tiempo restante: {minutes:02d}:{seconds:02d}")
+        self._timer_var.set(f"{minutes:02d}:{seconds:02d}")

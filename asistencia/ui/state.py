@@ -4,7 +4,6 @@ from typing import Callable
 
 from ..camera import Camera, resolve_camera_index
 from ..face_engine import FaceEngine
-from ..liveness import EyeStateDetector
 from ..models import AppSettings, Course
 from ..storage import CourseRepository, SettingsRepository
 
@@ -13,13 +12,11 @@ class AppState:
     def __init__(
         self,
         engine: FaceEngine,
-        eyes: EyeStateDetector,
         repository: CourseRepository,
         settings_repository: SettingsRepository,
         settings: AppSettings,
     ) -> None:
         self.engine = engine
-        self.eyes = eyes
         self.repository = repository
         self.settings = settings
         self.session_active = False

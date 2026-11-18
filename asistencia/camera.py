@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import sys
+from dataclasses import dataclass
 from functools import lru_cache
 from typing import Sequence
 
@@ -21,17 +22,22 @@ INTEGRATED_HINTS = (
     "hp wide vision",
     "hp truevision",
     "hp true vision",
-    "hp webcam",
-    "hp hd camera",
     "facetime",
     "front camera",
     "surface camera",
     "integrada",
-    "frontal",
 )
-EXTERNAL_HINTS = ("usb", "webcam", "web cam", "external", "logitech", "pc camera", "hd full")
+SNAPSHOT_SIZE = (220, 165)
+CYAN = (0, 220, 255)
 
 Banner = tuple[str, tuple[int, int, int]]
+
+
+@dataclass(frozen=True)
+class ScanOverlay:
+    box: tuple[int, int, int, int] | None
+    progress: float
+    tick: float
 
 
 class Camera:
@@ -67,6 +73,10 @@ def device_names() -> list[str]:
         return []
 
 
+def names_available() -> bool:
+    return bool(device_names())
+
+
 def resolve_camera_index(name: str, fallback: int) -> int:
     if not name:
         return fallback
@@ -82,63 +92,84 @@ def resolve_camera_index(name: str, fallback: int) -> int:
 
 def classify_camera(name: str) -> str:
     lowered = name.lower()
-    if any(hint in lowered for hint in INTEGRATED_HINTS):
-        return "integrated"
-    if any(hint in lowered for hint in EXTERNAL_HINTS):
-        return "external"
-    return "unknown"
+    return "integrated" if any(hint in lowered for hint in INTEGRATED_HINTS) else "unknown"
 
 
-def assign_kinds(entries: Sequence[tuple[int, str]]) -> tuple[CameraInfo, ...]:
-    kinds = [classify_camera(name) for _, name in entries]
-    if len(entries) >= 2:
-        if "integrated" in kinds:
-            kinds = ["external" if kind == "unknown" else kind for kind in kinds]
-        elif "external" in kinds:
-            kinds = ["integrated" if kind == "unknown" else kind for kind in kinds]
-        else:
-            kinds = ["integrated", *["external"] * (len(kinds) - 1)]
-    return tuple(
-        CameraInfo(index, name, kind) for (index, name), kind in zip(entries, kinds)
-    )
+def make_snapshot(frame: np.ndarray) -> Image.Image:
+    image = Image.fromarray(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
+    return image.resize(SNAPSHOT_SIZE, Image.Resampling.LANCZOS)
 
 
 def detect_cameras() -> tuple[CameraInfo, ...]:
     names = device_names()
     candidates = len(names) if names else MAX_CAMERA_INDEX
-    found: list[tuple[int, str]] = []
+    found: list[CameraInfo] = []
     for index in range(candidates):
         try:
             camera = Camera(index)
         except CameraError:
             continue
         frame = None
-        for _ in range(5):
+        for _ in range(8):
             frame = camera.read()
-            if frame is not None:
-                break
         camera.release()
-        if frame is not None:
-            found.append((index, names[index] if index < len(names) else f"Cámara {index}"))
-    return assign_kinds(found)
+        if frame is None:
+            continue
+        name = names[index] if index < len(names) else f"Cámara {index}"
+        found.append(CameraInfo(index, name, classify_camera(name), make_snapshot(frame)))
+    return tuple(found)
 
 
-@lru_cache(maxsize=4)
+@lru_cache(maxsize=6)
 def label_font(size: int = 18) -> ImageFont.ImageFont:
     try:
-        return ImageFont.truetype("arial.ttf", size)
+        return ImageFont.truetype("segoeuib.ttf", size)
     except OSError:
-        return ImageFont.load_default()
+        try:
+            return ImageFont.truetype("arial.ttf", size)
+        except OSError:
+            return ImageFont.load_default(size)
+
+
+def _draw_scan(image: Image.Image, scan: ScanOverlay) -> Image.Image:
+    if scan.box is None:
+        return image
+    x, y, w, h = scan.box
+    layer = Image.new("RGBA", image.size, (0, 0, 0, 0))
+    draw = ImageDraw.Draw(layer)
+    length = max(18, int(min(w, h) * 0.22))
+    for corner_x, corner_y, step_x, step_y in (
+        (x, y, 1, 1),
+        (x + w, y, -1, 1),
+        (x, y + h, 1, -1),
+        (x + w, y + h, -1, -1),
+    ):
+        draw.line(
+            [(corner_x, corner_y + step_y * length), (corner_x, corner_y), (corner_x + step_x * length, corner_y)],
+            fill=(*CYAN, 255),
+            width=4,
+        )
+    phase = (scan.tick * 0.9) % 2.0
+    fraction = phase if phase <= 1.0 else 2.0 - phase
+    line_y = y + int(fraction * h)
+    for offset, alpha in ((0, 235), (-3, 150), (-6, 95), (-9, 55), (-12, 25)):
+        draw.line([(x, line_y + offset), (x + w, line_y + offset)], fill=(*CYAN, alpha), width=3)
+    caption = f"ESCANEANDO  {int(scan.progress * 100)} %"
+    draw.text((x, min(image.height - 28, y + h + 6)), caption, fill=(*CYAN, 255), font=label_font(17))
+    base = image.convert("RGBA")
+    base.alpha_composite(layer)
+    return base.convert("RGB")
 
 
 def render_frame(
     frame: np.ndarray,
     results: Sequence[FaceResult],
     banner: Banner | None = None,
+    scan: ScanOverlay | None = None,
 ) -> Image.Image:
     image = Image.fromarray(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
     draw = ImageDraw.Draw(image)
-    font = label_font(18)
+    font = label_font(17)
     for result in results:
         x, y, w, h = result.box
         color = (46, 139, 87) if result.recognized else (176, 58, 46)
@@ -149,8 +180,11 @@ def render_frame(
         left, top, right, bottom = draw.textbbox((x, text_y), result.label, font=font)
         draw.rectangle((left - 4, top - 2, right + 4, bottom + 2), fill=color)
         draw.text((x, text_y), result.label, fill="white", font=font)
+    if scan is not None:
+        image = _draw_scan(image, scan)
     if banner is not None:
+        draw = ImageDraw.Draw(image)
         text, color = banner
         draw.rectangle((0, 0, image.width, 46), fill=color)
-        draw.text((14, 9), text, fill="white", font=label_font(24))
+        draw.text((14, 8), text, fill="white", font=label_font(23))
     return image

@@ -1,11 +1,15 @@
 from __future__ import annotations
 
-from dataclasses import dataclass, replace
-from datetime import datetime, time
+from dataclasses import dataclass, field, replace
+from datetime import date, datetime, time
+from typing import TYPE_CHECKING
 
 from .config import DAY_LABELS, TIME_PATTERN
 from .errors import ValidationError
 from .validators import name_sort_key
+
+if TYPE_CHECKING:
+    from PIL import Image
 
 
 def parse_time(text: str) -> time:
@@ -47,9 +51,18 @@ class Slot:
         )
 
     @property
+    def days_text(self) -> str:
+        return ", ".join(DAY_LABELS[day] for day in sorted(self.days))
+
+    @property
+    def minutes(self) -> int:
+        start = datetime.combine(date.today(), parse_time(self.start))
+        end = datetime.combine(date.today(), parse_time(self.end))
+        return int((end - start).total_seconds() // 60)
+
+    @property
     def label(self) -> str:
-        days = ", ".join(DAY_LABELS[day] for day in sorted(self.days))
-        return f"{days}   ·   {self.start} a {self.end}"
+        return f"{self.days_text}   ·   {self.start} a {self.end}"
 
 
 @dataclass(frozen=True)
@@ -119,7 +132,6 @@ class AppSettings:
     camera_index: int = 0
     camera_name: str = ""
     threshold: float = 0.40
-    manual_minutes: int = 10
 
 
 @dataclass(frozen=True)
@@ -134,14 +146,11 @@ class CameraInfo:
     index: int
     name: str
     kind: str = "unknown"
+    snapshot: Image.Image | None = field(default=None, compare=False, hash=False, repr=False)
 
     @property
-    def label(self) -> str:
-        prefix = {
-            "integrated": "Cámara de la laptop (integrada)",
-            "external": "Webcam externa USB",
-        }.get(self.kind, "Cámara")
-        return f"{prefix} · {self.name}"
+    def is_integrated(self) -> bool:
+        return self.kind == "integrated"
 
 
 @dataclass(frozen=True)

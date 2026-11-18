@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import re
-from datetime import date, datetime
+from datetime import datetime
 from pathlib import Path
 from typing import Sequence
 from zipfile import BadZipFile
@@ -13,19 +13,14 @@ from openpyxl.utils import get_column_letter
 from openpyxl.utils.exceptions import InvalidFileException
 
 from .config import COLOR_PRIMARY, CONFIRM_FRAMES
-from .errors import AlreadyTakenError, AttendanceError
+from .errors import AttendanceError
 from .face_engine import FaceEngine, Gallery
 from .models import FaceResult, RecordResult, Student
 from .validators import name_sort_key
 
 
 class AttendanceSession:
-    def __init__(
-        self,
-        engine: FaceEngine,
-        gallery: Gallery,
-        threshold: float,
-    ) -> None:
+    def __init__(self, engine: FaceEngine, gallery: Gallery, threshold: float) -> None:
         self._engine = engine
         self._gallery = gallery
         self._threshold = threshold
@@ -72,6 +67,8 @@ class AttendanceSession:
 
 
 class AttendanceBook:
+    HEADER_FORMAT = "DD/MM/YYYY HH:MM"
+
     def __init__(self, path: Path, sheet_title: str = "Asistencia") -> None:
         self._path = path
         cleaned = re.sub(r"[\[\]:*?/\\]", "", sheet_title).strip()
@@ -84,20 +81,6 @@ class AttendanceBook:
         if isinstance(value, float) and value.is_integer():
             return str(int(value))
         return str(value).strip()
-
-    @staticmethod
-    def _as_date(value: object) -> date | None:
-        if isinstance(value, datetime):
-            return value.date()
-        if isinstance(value, date):
-            return value
-        if isinstance(value, str):
-            for pattern in ("%Y-%m-%d", "%d/%m/%Y"):
-                try:
-                    return datetime.strptime(value.strip(), pattern).date()
-                except ValueError:
-                    continue
-        return None
 
     @staticmethod
     def _style_header(cell) -> None:
@@ -118,6 +101,10 @@ class AttendanceBook:
         else:
             try:
                 workbook = load_workbook(self._path)
+            except PermissionError as error:
+                raise AttendanceError(
+                    "El Excel está abierto en otro programa. Ciérralo y vuelve a intentar."
+                ) from error
             except (OSError, InvalidFileException, BadZipFile) as error:
                 raise AttendanceError(f"No se pudo abrir el Excel ({error}).") from error
         sheet = workbook.active
@@ -129,7 +116,7 @@ class AttendanceBook:
                 cell.value = title
             self._style_header(cell)
         sheet.column_dimensions["A"].width = 16
-        sheet.column_dimensions["B"].width = 34
+        sheet.column_dimensions["B"].width = 38
         sheet.freeze_panes = "C2"
         return workbook, sheet
 
@@ -139,14 +126,6 @@ class AttendanceBook:
             column -= 1
         return max(column, 2)
 
-    def _date_columns(self, sheet) -> dict[date, int]:
-        columns: dict[date, int] = {}
-        for column in range(3, self._last_header_column(sheet) + 1):
-            day = self._as_date(sheet.cell(1, column).value)
-            if day is not None:
-                columns[day] = column
-        return columns
-
     def _student_rows(self, sheet) -> dict[str, int]:
         rows: dict[str, int] = {}
         for row in range(2, sheet.max_row + 1):
@@ -154,22 +133,6 @@ class AttendanceBook:
             if student_id:
                 rows[student_id] = row
         return rows
-
-    def _with_students(self, sheet, students: Sequence[Student]) -> dict[str, int]:
-        rows = self._student_rows(sheet)
-        next_row = max(rows.values(), default=1) + 1
-        added: dict[str, int] = {}
-        for student in students:
-            if student.student_id in rows or student.student_id in added:
-                continue
-            sheet.cell(next_row, 1, student.student_id)
-            sheet.cell(next_row, 2, student.name)
-            added = {**added, student.student_id: next_row}
-            next_row += 1
-        if not added:
-            return rows
-        self._sort_rows(sheet)
-        return self._student_rows(sheet)
 
     def _sort_rows(self, sheet) -> None:
         last_column = self._last_header_column(sheet)
@@ -188,6 +151,23 @@ class AttendanceBook:
                 if column >= 3 and offset < len(ordered):
                     sheet.cell(row, column).alignment = Alignment(horizontal="center")
 
+    def _with_students(self, sheet, students: Sequence[Student]) -> dict[str, int]:
+        rows = self._student_rows(sheet)
+        next_row = max(rows.values(), default=1) + 1
+        added = 0
+        for student in students:
+            if student.student_id in rows:
+                continue
+            sheet.cell(next_row, 1, student.student_id)
+            sheet.cell(next_row, 2, student.name)
+            rows = {**rows, student.student_id: next_row}
+            next_row += 1
+            added += 1
+        if not added:
+            return rows
+        self._sort_rows(sheet)
+        return self._student_rows(sheet)
+
     def _save(self, workbook) -> None:
         try:
             workbook.save(self._path)
@@ -198,37 +178,39 @@ class AttendanceBook:
         except OSError as error:
             raise AttendanceError(f"No se pudo guardar el Excel ({error}).") from error
 
-    def has_date(self, day: date) -> bool:
-        if not self._path.exists():
-            return False
-        _, sheet = self._load()
-        return day in self._date_columns(sheet)
-
     def sync_students(self, students: Sequence[Student]) -> None:
         workbook, sheet = self._load()
         self._with_students(sheet, students)
         self._save(workbook)
 
-    def record(
-        self,
-        day: date,
-        present_ids: frozenset[str],
-        students: Sequence[Student],
-        replace_existing: bool = False,
+    def start_list(self, moment: datetime, students: Sequence[Student]) -> int:
+        workbook, sheet = self._load()
+        rows = self._with_students(sheet, students)
+        column = self._last_header_column(sheet) + 1
+        header = sheet.cell(1, column, moment.replace(second=0, microsecond=0))
+        header.number_format = self.HEADER_FORMAT
+        self._style_header(header)
+        sheet.column_dimensions[get_column_letter(column)].width = 18
+        for row in rows.values():
+            cell = sheet.cell(row, column, 0)
+            cell.alignment = Alignment(horizontal="center")
+        self._save(workbook)
+        return column
+
+    def mark_present(self, column: int, student_id: str) -> None:
+        workbook, sheet = self._load()
+        row = self._student_rows(sheet).get(student_id)
+        if row is None:
+            raise AttendanceError(f"La cédula {student_id} no está en el Excel.")
+        cell = sheet.cell(row, column, 1)
+        cell.alignment = Alignment(horizontal="center")
+        self._save(workbook)
+
+    def finalize(
+        self, column: int, present_ids: frozenset[str], students: Sequence[Student]
     ) -> RecordResult:
         workbook, sheet = self._load()
         rows = self._with_students(sheet, students)
-        columns = self._date_columns(sheet)
-        if day in columns:
-            if not replace_existing:
-                raise AlreadyTakenError(f"Ya existe una lista para el {day:%d/%m/%Y}.")
-            column = columns[day]
-        else:
-            column = self._last_header_column(sheet) + 1
-            header = sheet.cell(1, column, day)
-            header.number_format = "DD/MM/YYYY"
-            self._style_header(header)
-        sheet.column_dimensions[get_column_letter(column)].width = 12
         for student_id, row in rows.items():
             cell = sheet.cell(row, column, 1 if student_id in present_ids else 0)
             cell.alignment = Alignment(horizontal="center")

@@ -10,7 +10,6 @@ from asistencia.branding import Splash, install_icon, prepare_windows_identity
 from asistencia.config import APP_TITLE
 from asistencia.errors import ModelError
 from asistencia.face_engine import FaceEngine
-from asistencia.liveness import EyeStateDetector
 from asistencia.storage import CourseRepository, SettingsRepository
 from asistencia.ui.main_window import MainWindow
 from asistencia.ui.state import AppState
@@ -30,7 +29,6 @@ def main() -> None:
         settings_repository = SettingsRepository()
         settings, settings_warning = settings_repository.load()
         engine = FaceEngine(on_progress=splash.report)
-        eyes = EyeStateDetector()
         splash.report("Todo listo", 1.0)
         splash.hold(0.9)
     except (ModelError, cv2.error) as error:
@@ -42,7 +40,7 @@ def main() -> None:
     warnings = [*repository.load_warnings]
     if settings_warning:
         warnings.append(settings_warning)
-    state = AppState(engine, eyes, repository, settings_repository, settings)
+    state = AppState(engine, repository, settings_repository, settings)
     MainWindow(root, state, icon, warnings)
     root.deiconify()
     root.mainloop()

@@ -7,12 +7,7 @@ from tkinter import messagebox, ttk
 from PIL import ImageTk
 
 from ..branding import make_logo
-from ..config import (
-    APP_TITLE,
-    COLOR_PRIMARY,
-    DAY_LABELS,
-    FONT_FAMILY,
-)
+from ..config import APP_TITLE, COLOR_PRIMARY, DAY_LABELS, FONT_FAMILY
 from .attendance_tab import AttendanceTab
 from .courses_tab import CoursesTab
 from .scrollable import ScrollableFrame
@@ -31,18 +26,19 @@ class MainWindow:
         self._root = root
         self._state = state
         self._icon = icon
-        self._header_logo = ImageTk.PhotoImage(make_logo(44))
+        self._header_logo = ImageTk.PhotoImage(make_logo(46))
         self._clock_var = tk.StringVar()
         root.title(APP_TITLE)
-        width = min(1120, root.winfo_screenwidth() - 60)
-        height = min(780, root.winfo_screenheight() - 110)
+        width = min(1280, root.winfo_screenwidth() - 60)
+        height = min(800, root.winfo_screenheight() - 110)
         root.geometry(f"{width}x{height}+30+20")
-        root.minsize(1040, 520)
+        root.minsize(1100, 520)
         self._build_header()
-        self._build_notebook_host()
-        self._attendance = self._add_tab(AttendanceTab, "  Tomar lista  ")
-        self._courses = self._add_tab(CoursesTab, "  Cursos  ")
-        self._settings = self._add_tab(SettingsTab, "  Ajustes  ")
+        self._notebook = ttk.Notebook(root)
+        self._notebook.pack(fill="both", expand=True, padx=8, pady=(8, 8))
+        self._attendance = self._add_tab(AttendanceTab, "  📷  Tomar lista  ")
+        self._courses = self._add_tab(CoursesTab, "  📚  Cursos  ")
+        self._settings = self._add_tab(SettingsTab, "  ⚙  Ajustes  ")
         root.protocol("WM_DELETE_WINDOW", self._on_close)
         for warning in warnings:
             messagebox.showwarning(APP_TITLE, warning, parent=root)
@@ -50,29 +46,25 @@ class MainWindow:
         root.after(400, self._settings.refresh_cameras)
 
     def _build_header(self) -> None:
-        header = tk.Frame(self._root, bg=COLOR_PRIMARY, height=64)
+        header = tk.Frame(self._root, bg=COLOR_PRIMARY, height=70)
         header.pack(fill="x")
         header.pack_propagate(False)
-        tk.Label(header, image=self._header_logo, bg=COLOR_PRIMARY).pack(side="left", padx=(16, 8))
+        tk.Label(header, image=self._header_logo, bg=COLOR_PRIMARY).pack(side="left", padx=(18, 10))
+        titles = tk.Frame(header, bg=COLOR_PRIMARY)
+        titles.pack(side="left")
         tk.Label(
-            header,
-            text=APP_TITLE,
-            bg=COLOR_PRIMARY,
-            fg="white",
-            font=(FONT_FAMILY, 18, "bold"),
-        ).pack(side="left")
+            titles, text=APP_TITLE, bg=COLOR_PRIMARY, fg="white", font=(FONT_FAMILY, 18, "bold")
+        ).pack(anchor="w")
         tk.Label(
-            header,
-            textvariable=self._clock_var,
+            titles,
+            text="Control de asistencia con reconocimiento facial",
             bg=COLOR_PRIMARY,
             fg="#D6EAF8",
-            font=(FONT_FAMILY, 11),
+            font=(FONT_FAMILY, 9),
+        ).pack(anchor="w")
+        tk.Label(
+            header, textvariable=self._clock_var, bg=COLOR_PRIMARY, fg="#D6EAF8", font=(FONT_FAMILY, 11)
         ).pack(side="right", padx=20)
-
-    def _build_notebook_host(self) -> ttk.Notebook:
-        self._notebook = ttk.Notebook(self._root)
-        self._notebook.pack(fill="both", expand=True, padx=8, pady=(8, 8))
-        return self._notebook
 
     def _add_tab(self, factory, title: str):
         holder = ScrollableFrame(self._notebook)

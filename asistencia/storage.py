@@ -13,7 +13,14 @@ from .errors import AppError, ValidationError
 from .models import AppSettings, Course, course_from_dict
 
 COURSE_FILE = "curso.json"
+LEGACY_EXCEL_NAME = "asistencia.xlsx"
+EXCEL_SUFFIX = "_ListaAsistencia.xlsx"
 MAX_NAME_LENGTH = 60
+
+
+def excel_file_name(course_name: str) -> str:
+    safe = re.sub(r'[<>:"/\\|?*\x00-\x1f]', "", course_name).strip().rstrip(".")
+    return f"{safe or 'Curso'}{EXCEL_SUFFIX}"
 
 
 def write_json_atomic(path: Path, payload: object) -> None:
@@ -77,8 +84,25 @@ class CourseRepository:
                     f"No se pudo leer el curso de la carpeta {folder.name} ({error})."
                 )
                 continue
+            course = self._migrate_excel_name(folder, course)
             courses[course.course_id] = course
         return courses
+
+    def _migrate_excel_name(self, folder: Path, course: Course) -> Course:
+        if Path(course.excel_path) != folder / LEGACY_EXCEL_NAME:
+            return course
+        target = folder / excel_file_name(course.name)
+        try:
+            if (folder / LEGACY_EXCEL_NAME).exists() and not target.exists():
+                os.replace(folder / LEGACY_EXCEL_NAME, target)
+            migrated = replace(course, excel_path=str(target))
+            write_json_atomic(folder / COURSE_FILE, asdict(migrated))
+        except OSError as error:
+            self.load_warnings.append(
+                f"No se pudo renombrar el Excel de «{course.name}» ({error})."
+            )
+            return course
+        return migrated
 
     @staticmethod
     def _slug(name: str) -> str:
@@ -106,14 +130,22 @@ class CourseRepository:
         course = Course(
             course_id=course_id,
             name=clean,
-            excel_path=str(self._root / course_id / "asistencia.xlsx"),
+            excel_path=str(self._root / course_id / excel_file_name(clean)),
         )
         self.save(course)
         return course
 
     def rename(self, course_id: str, name: str) -> Course:
         course = self._courses[course_id]
-        renamed = replace(course, name=self._validated_name(name, course_id))
+        new_name = self._validated_name(name, course_id)
+        excel_path = course.excel_path
+        current_default = self._root / course_id / excel_file_name(course.name)
+        if Path(excel_path) == current_default:
+            new_path = self._root / course_id / excel_file_name(new_name)
+            if current_default.exists() and not new_path.exists():
+                os.replace(current_default, new_path)
+            excel_path = str(new_path)
+        renamed = replace(course, name=new_name, excel_path=excel_path)
         self.save(renamed)
         return renamed
 

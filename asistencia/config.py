@@ -41,17 +41,20 @@ NOTICE_MS = 4000
 MAX_PROVINCE_CODE = 24
 NAME_MAX_LENGTH = 60
 
-LOOK_SECONDS = 3.0
-CLOSE_SECONDS = 3.0
-CLOSE_GRACE_SECONDS = 1.2
-MIN_SAMPLES = 3
+SAMPLE_INTERVAL = 0.6
 MAX_SAMPLES = 5
-SAMPLE_INTERVAL = 0.5
 MIN_FACE_SCORE = 0.9
-MIN_EYE_CONTRAST = 0.08
-EYE_CLOSED_FACTOR = 0.75
-CLOSED_RATIO_MIN = 0.6
-MIN_CLOSED_FRAMES = 4
+SCAN_TIMEOUT_SECONDS = 60.0
+REMIND_SECONDS = 8.0
+MAX_YAW_RATIO = 0.25
+MAX_ROLL_RATIO = 0.30
+MANUAL_SESSION_MINUTES = 20
+
+PRECISION_LEVELS = (
+    ("Flexible", 0.33, "Reconoce con más facilidad. Úselo si el sistema no reconoce a los estudiantes."),
+    ("Equilibrado", 0.40, "Recomendado para la mayoría de los casos."),
+    ("Estricto", 0.50, "Evita confundir a una persona con otra. Úselo si hay falsos registros."),
+)
 
 DAY_LABELS = ("Lun", "Mar", "Mié", "Jue", "Vie", "Sáb", "Dom")
 TIME_PATTERN = re.compile(r"^([01]\d|2[0-3]):([0-5]\d)$")
@@ -61,8 +64,13 @@ COLOR_PRIMARY_DARK = "#163A5A"
 COLOR_SUCCESS = "#2E8B57"
 COLOR_DANGER = "#B03A2E"
 COLOR_WARNING = "#B9770E"
-COLOR_BG = "#F4F6F8"
+COLOR_BG = "#EEF2F6"
 COLOR_CARD = "#FFFFFF"
 COLOR_TEXT = "#1B2631"
 COLOR_MUTED = "#5D6D7E"
+COLOR_BORDER = "#D5DCE4"
+COLOR_ZEBRA = "#F5F8FB"
+COLOR_SELECT = "#D6E9F8"
+COLOR_ACCENT = "#2E86C1"
+COLOR_INFO_BG = "#EAF2FB"
 FONT_FAMILY = "Segoe UI"
