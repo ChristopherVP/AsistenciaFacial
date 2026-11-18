@@ -27,7 +27,7 @@ class ScrollableFrame(ttk.Frame):
         self._canvas.itemconfigure(self._window, width=event.width)
 
     def _on_wheel(self, event: tk.Event) -> None:
-        if not self.winfo_ismapped():
+        if not self.winfo_exists() or not self.winfo_ismapped():
             return
         target = self.winfo_containing(event.x_root, event.y_root)
         while target is not None:

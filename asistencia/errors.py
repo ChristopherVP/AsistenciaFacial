@@ -23,3 +23,7 @@ class AttendanceError(AppError):
 
 class AlreadyTakenError(AttendanceError):
     pass
+
+
+class AuthError(AppError):
+    pass

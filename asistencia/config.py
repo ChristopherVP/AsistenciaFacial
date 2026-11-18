@@ -11,6 +11,7 @@ MODELS_DIR = DATA_DIR / "modelos"
 COURSES_DIR = DATA_DIR / "cursos"
 BACKUP_DIR = DATA_DIR / "respaldos"
 SETTINGS_FILE = DATA_DIR / "ajustes.json"
+USERS_FILE = DATA_DIR / "usuarios.json"
 ICON_FILE = DATA_DIR / "icono.ico"
 
 DETECTOR_FILE = "face_detection_yunet_2023mar.onnx"
@@ -54,6 +55,20 @@ PRECISION_LEVELS = (
     ("Flexible", 0.33, "Reconoce con más facilidad. Úselo si el sistema no reconoce a los estudiantes."),
     ("Equilibrado", 0.40, "Recomendado para la mayoría de los casos."),
     ("Estricto", 0.50, "Evita confundir a una persona con otra. Úselo si hay falsos registros."),
+)
+
+MIN_PASSWORD_LENGTH = 8
+MAX_PASSWORD_LENGTH = 64
+MIN_ANSWER_LENGTH = 3
+PBKDF2_ITERATIONS = 200_000
+MAX_LOGIN_ATTEMPTS = 5
+LOCKOUT_SECONDS = 30.0
+SECURITY_QUESTIONS = (
+    "¿Cómo se llamaba su primera mascota?",
+    "¿En qué ciudad nació su madre?",
+    "¿Cuál es el nombre de su mejor amigo de la infancia?",
+    "¿Cómo se llamaba su escuela primaria?",
+    "¿Cuál es su comida favorita?",
 )
 
 DAY_LABELS = ("Lun", "Mar", "Mié", "Jue", "Vie", "Sáb", "Dom")

@@ -3,7 +3,13 @@ from __future__ import annotations
 import re
 import unicodedata
 
-from .config import MAX_PROVINCE_CODE, NAME_MAX_LENGTH
+from .config import (
+    MAX_PASSWORD_LENGTH,
+    MAX_PROVINCE_CODE,
+    MIN_ANSWER_LENGTH,
+    MIN_PASSWORD_LENGTH,
+    NAME_MAX_LENGTH,
+)
 from .errors import ValidationError
 
 LETTERS = "A-Za-zÁÉÍÓÚÜÑáéíóúüñ"
@@ -63,3 +69,30 @@ def name_sort_key(name: str) -> str:
     decomposed = unicodedata.normalize("NFD", name)
     stripped = "".join(char for char in decomposed if not unicodedata.combining(char))
     return stripped.casefold()
+
+
+def validate_password(password: str, confirmation: str) -> str:
+    if not password:
+        raise ValidationError("Escribe la contraseña.")
+    if len(password) < MIN_PASSWORD_LENGTH:
+        raise ValidationError(
+            f"La contraseña debe tener al menos {MIN_PASSWORD_LENGTH} caracteres."
+        )
+    if len(password) > MAX_PASSWORD_LENGTH:
+        raise ValidationError(
+            f"La contraseña no puede pasar de {MAX_PASSWORD_LENGTH} caracteres."
+        )
+    if password != confirmation:
+        raise ValidationError("Las contraseñas no coinciden.")
+    return password
+
+
+def normalize_answer(text: str) -> str:
+    decomposed = unicodedata.normalize("NFD", " ".join(text.split()))
+    stripped = "".join(char for char in decomposed if not unicodedata.combining(char))
+    answer = stripped.casefold()
+    if len(answer) < MIN_ANSWER_LENGTH:
+        raise ValidationError(
+            f"La respuesta de seguridad debe tener al menos {MIN_ANSWER_LENGTH} caracteres."
+        )
+    return answer

@@ -7,7 +7,14 @@ from tkinter import messagebox, ttk
 from PIL import ImageTk
 
 from ..branding import make_logo
-from ..config import APP_TITLE, COLOR_PRIMARY, DAY_LABELS, FONT_FAMILY
+from ..config import (
+    APP_TITLE,
+    COLOR_ACCENT,
+    COLOR_PRIMARY,
+    COLOR_PRIMARY_DARK,
+    DAY_LABELS,
+    FONT_FAMILY,
+)
 from .attendance_tab import AttendanceTab
 from .courses_tab import CoursesTab
 from .scrollable import ScrollableFrame
@@ -23,6 +30,9 @@ class MainWindow:
         icon: ImageTk.PhotoImage,
         warnings: list[str],
     ) -> None:
+        self.logout_requested = False
+        self._tick_job: str | None = None
+        self._camera_job: str | None = None
         self._root = root
         self._state = state
         self._icon = icon
@@ -43,7 +53,7 @@ class MainWindow:
         for warning in warnings:
             messagebox.showwarning(APP_TITLE, warning, parent=root)
         self._tick()
-        root.after(400, self._settings.refresh_cameras)
+        self._camera_job = root.after(400, self._settings.refresh_cameras)
 
     def _build_header(self) -> None:
         header = tk.Frame(self._root, bg=COLOR_PRIMARY, height=70)
@@ -65,6 +75,29 @@ class MainWindow:
         tk.Label(
             header, textvariable=self._clock_var, bg=COLOR_PRIMARY, fg="#D6EAF8", font=(FONT_FAMILY, 11)
         ).pack(side="right", padx=20)
+        tk.Button(
+            header,
+            text="Cerrar sesión",
+            command=self._logout,
+            bg=COLOR_PRIMARY_DARK,
+            fg="white",
+            activebackground=COLOR_ACCENT,
+            activeforeground="white",
+            relief="flat",
+            cursor="hand2",
+            font=(FONT_FAMILY, 10, "bold"),
+            padx=12,
+            pady=6,
+        ).pack(side="right")
+        user = self._state.current_user
+        if user is not None:
+            tk.Label(
+                header,
+                text=f"👤  {user.full_name}",
+                bg=COLOR_PRIMARY,
+                fg="white",
+                font=(FONT_FAMILY, 10, "bold"),
+            ).pack(side="right", padx=14)
 
     def _add_tab(self, factory, title: str):
         holder = ScrollableFrame(self._notebook)
@@ -74,16 +107,33 @@ class MainWindow:
         return content
 
     def _tick(self) -> None:
-        self._root.after(1000, self._tick)
+        self._tick_job = self._root.after(1000, self._tick)
         now = datetime.now()
         self._clock_var.set(f"{DAY_LABELS[now.weekday()]} {now:%d/%m/%Y   %H:%M:%S}")
         self._attendance.on_tick(now)
 
+    def _confirm_end_session(self, action: str) -> bool:
+        if not self._attendance.is_running:
+            return True
+        if not messagebox.askyesno(
+            APP_TITLE, f"Hay una lista en curso.\n¿Finalizar y guardar antes de {action}?"
+        ):
+            return False
+        self._attendance.finish_session()
+        return True
+
+    def _logout(self) -> None:
+        if self._confirm_end_session("cerrar sesión"):
+            self.logout_requested = True
+            self._root.quit()
+
     def _on_close(self) -> None:
-        if self._attendance.is_running:
-            if not messagebox.askyesno(
-                APP_TITLE, "Hay una lista en curso.\n¿Finalizar y guardar antes de salir?"
-            ):
-                return
-            self._attendance.finish_session()
-        self._root.destroy()
+        if self._confirm_end_session("salir"):
+            self._root.quit()
+
+    def close(self) -> None:
+        for job in (self._tick_job, self._camera_job):
+            if job is not None:
+                self._root.after_cancel(job)
+        for child in self._root.winfo_children():
+            child.destroy()

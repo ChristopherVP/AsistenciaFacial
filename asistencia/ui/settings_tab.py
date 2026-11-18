@@ -16,7 +16,7 @@ from ..config import (
     NOTICE_MS,
     PRECISION_LEVELS,
 )
-from ..errors import CameraError
+from ..errors import AuthError, CameraError
 from ..models import CameraInfo
 from .camera_preview import CameraPreviewDialog
 from .state import AppState
@@ -33,6 +33,9 @@ class SettingsTab(ttk.Frame):
         self._camera_status_var = tk.StringVar(value="Buscando cámaras…")
         self._save_status_var = tk.StringVar()
         self._save_job: str | None = None
+        user = state.current_user
+        self._remember_var = tk.BooleanVar(value=bool(user and user.remembered))
+        self._account_status_var = tk.StringVar()
         nearest = min(PRECISION_LEVELS, key=lambda level: abs(level[1] - state.settings.threshold))
         self._precision_var = tk.StringVar(value=nearest[0])
         self._build()
@@ -87,6 +90,47 @@ class SettingsTab(ttk.Frame):
         )
         ttk.Label(actions, textvariable=self._save_status_var, style="Page.Success.TLabel").pack(
             side="left", padx=12
+        )
+        self._build_account_card()
+
+    def _build_account_card(self) -> None:
+        card = Card(self, padding=18)
+        card.pack(fill="x", pady=(18, 0))
+        ttk.Label(card.body, text="👤  Mi cuenta", style="CardTitle.TLabel").pack(anchor="w")
+        user = self._state.current_user
+        if user is not None:
+            ttk.Label(
+                card.body, text=f"{user.full_name}   ·   Cédula {user.cedula}", style="Card.TLabel"
+            ).pack(anchor="w", pady=(6, 8))
+        ttk.Checkbutton(
+            card.body,
+            text="Entrar con un clic (recordar mi usuario en este equipo)",
+            variable=self._remember_var,
+            command=self._toggle_remember,
+            style="Card.TCheckbutton",
+        ).pack(anchor="w")
+        ttk.Label(
+            card.body,
+            text="Si lo desactiva, tendrá que escribir su contraseña cada vez que abra el programa.",
+            style="Hint.TLabel",
+            wraplength=900,
+        ).pack(anchor="w", pady=(4, 0))
+        ttk.Label(card.body, textvariable=self._account_status_var, style="Success.TLabel").pack(
+            anchor="w", pady=(6, 0)
+        )
+
+    def _toggle_remember(self) -> None:
+        wanted = self._remember_var.get()
+        try:
+            self._state.set_remember_current_user(wanted)
+        except AuthError as error:
+            self._remember_var.set(not wanted)
+            self._account_status_var.set(f"⚠ {error}")
+            return
+        self._account_status_var.set(
+            "✔ Usuario guardado: la próxima vez entrará con un clic."
+            if wanted
+            else "✔ Ya no se guarda el usuario: se pedirá la contraseña al entrar."
         )
 
     def refresh_cameras(self) -> None:
