@@ -5,6 +5,7 @@ from datetime import datetime, time
 
 from .config import DAY_LABELS, TIME_PATTERN
 from .errors import ValidationError
+from .validators import name_sort_key
 
 
 def parse_time(text: str) -> time:
@@ -19,6 +20,10 @@ class Student:
     student_id: str
     name: str
     embeddings: tuple[tuple[float, ...], ...]
+
+
+def sorted_students(students) -> tuple[Student, ...]:
+    return tuple(sorted(students, key=lambda student: name_sort_key(student.name)))
 
 
 @dataclass(frozen=True)
@@ -55,15 +60,14 @@ class Course:
     students: tuple[Student, ...] = ()
     slots: tuple[Slot, ...] = ()
     schedule_enabled: bool = False
-    finish_when_complete: bool = True
     last_auto_date: str = ""
 
     def add_student(self, student: Student) -> Course:
         if any(item.student_id == student.student_id for item in self.students):
             raise ValidationError(
-                f"Ya existe un estudiante con el ID {student.student_id} en este curso."
+                f"Ya existe un estudiante con la cédula {student.student_id} en este curso."
             )
-        return replace(self, students=(*self.students, student))
+        return replace(self, students=sorted_students((*self.students, student)))
 
     def remove_student(self, student_id: str) -> Course:
         remaining = tuple(s for s in self.students if s.student_id != student_id)
@@ -80,7 +84,7 @@ class Course:
 
 
 def course_from_dict(raw: dict) -> Course:
-    students = tuple(
+    students = sorted_students(
         Student(
             student_id=str(item["student_id"]),
             name=str(item["name"]),
@@ -106,7 +110,6 @@ def course_from_dict(raw: dict) -> Course:
         students=students,
         slots=slots,
         schedule_enabled=bool(raw.get("schedule_enabled", False)),
-        finish_when_complete=bool(raw.get("finish_when_complete", True)),
         last_auto_date=str(raw.get("last_auto_date", "")),
     )
 
@@ -114,6 +117,7 @@ def course_from_dict(raw: dict) -> Course:
 @dataclass(frozen=True)
 class AppSettings:
     camera_index: int = 0
+    camera_name: str = ""
     threshold: float = 0.40
     manual_minutes: int = 10
 
@@ -129,10 +133,15 @@ class FaceResult:
 class CameraInfo:
     index: int
     name: str
+    kind: str = "unknown"
 
     @property
     def label(self) -> str:
-        return f"{self.index} - {self.name}"
+        prefix = {
+            "integrated": "Cámara de la laptop (integrada)",
+            "external": "Webcam externa USB",
+        }.get(self.kind, "Cámara")
+        return f"{prefix} · {self.name}"
 
 
 @dataclass(frozen=True)

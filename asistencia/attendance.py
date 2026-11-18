@@ -16,6 +16,7 @@ from .config import COLOR_PRIMARY, CONFIRM_FRAMES
 from .errors import AlreadyTakenError, AttendanceError
 from .face_engine import FaceEngine, Gallery
 from .models import FaceResult, RecordResult, Student
+from .validators import name_sort_key
 
 
 class AttendanceSession:
@@ -24,22 +25,22 @@ class AttendanceSession:
         engine: FaceEngine,
         gallery: Gallery,
         threshold: float,
-        roster_ids: frozenset[str],
     ) -> None:
         self._engine = engine
         self._gallery = gallery
         self._threshold = threshold
-        self._roster_ids = roster_ids
         self._streaks: dict[str, int] = {}
         self._present: dict[str, datetime] = {}
+        self._events: list[tuple[str, str]] = []
 
     @property
     def present(self) -> dict[str, datetime]:
         return dict(self._present)
 
-    @property
-    def complete(self) -> bool:
-        return bool(self._roster_ids) and self._roster_ids <= self._present.keys()
+    def pop_events(self) -> tuple[tuple[str, str], ...]:
+        events = tuple(self._events)
+        self._events = []
+        return events
 
     def process(self, frame: np.ndarray) -> tuple[FaceResult, ...]:
         results: list[FaceResult] = []
@@ -55,12 +56,18 @@ class AttendanceSession:
             seen.add(student.student_id)
             results.append(FaceResult((x, y, w, h), student.name, True))
         self._streaks = {sid: self._streaks.get(sid, 0) + 1 for sid in seen}
-        confirmed = {
-            sid: datetime.now()
-            for sid, count in self._streaks.items()
-            if count >= CONFIRM_FRAMES and sid not in self._present
-        }
+        confirmed: dict[str, datetime] = {}
+        new_events: list[tuple[str, str]] = []
+        for student_id, count in self._streaks.items():
+            if count != CONFIRM_FRAMES:
+                continue
+            if student_id in self._present:
+                new_events.append(("already", student_id))
+            else:
+                confirmed[student_id] = datetime.now()
+                new_events.append(("registered", student_id))
         self._present = {**self._present, **confirmed}
+        self._events = [*self._events, *new_events]
         return tuple(results)
 
 
@@ -116,7 +123,7 @@ class AttendanceBook:
         sheet = workbook.active
         if is_new:
             sheet.title = self._sheet_title
-        for column, title in ((1, "ID"), (2, "Nombre")):
+        for column, title in ((1, "Cédula"), (2, "Apellidos y nombres")):
             cell = sheet.cell(1, column)
             if cell.value in (None, ""):
                 cell.value = title
@@ -159,7 +166,27 @@ class AttendanceBook:
             sheet.cell(next_row, 2, student.name)
             added = {**added, student.student_id: next_row}
             next_row += 1
-        return {**rows, **added}
+        if not added:
+            return rows
+        self._sort_rows(sheet)
+        return self._student_rows(sheet)
+
+    def _sort_rows(self, sheet) -> None:
+        last_column = self._last_header_column(sheet)
+        last_row = sheet.max_row
+        entries = []
+        for row in range(2, last_row + 1):
+            values = [sheet.cell(row, column).value for column in range(1, last_column + 1)]
+            if self._text(values[0]):
+                entries.append(values)
+        ordered = sorted(entries, key=lambda values: name_sort_key(self._text(values[1])))
+        for offset in range(last_row - 1):
+            row = 2 + offset
+            values = ordered[offset] if offset < len(ordered) else [None] * last_column
+            for column, value in enumerate(values, start=1):
+                sheet.cell(row, column).value = value
+                if column >= 3 and offset < len(ordered):
+                    sheet.cell(row, column).alignment = Alignment(horizontal="center")
 
     def _save(self, workbook) -> None:
         try:

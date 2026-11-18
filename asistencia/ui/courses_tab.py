@@ -9,7 +9,6 @@ from tkinter import filedialog, messagebox, simpledialog, ttk
 from typing import Callable
 
 from ..attendance import AttendanceBook
-from ..camera import Camera
 from ..config import APP_TITLE
 from ..errors import AttendanceError, CameraError, ValidationError
 from ..models import Course, Student
@@ -26,7 +25,6 @@ class CoursesTab(ttk.Frame):
         self._title_var = tk.StringVar()
         self._excel_var = tk.StringVar()
         self._enabled_var = tk.BooleanVar()
-        self._finish_var = tk.BooleanVar()
         self._build()
         state.subscribe(self._refresh_list)
         self._refresh_list()
@@ -75,12 +73,11 @@ class CoursesTab(ttk.Frame):
         ttk.Button(excel_row, text="Abrir", command=self._open_excel).pack(side="left", padx=(8, 0))
         ttk.Label(detail, text="Estudiantes", style="CardTitle.TLabel").pack(anchor="w", pady=(12, 2))
         self._students_tree = ttk.Treeview(
-            detail, columns=("id", "nombre", "fotos"), show="headings", height=6
+            detail, columns=("cedula", "nombre"), show="headings", height=8
         )
         for column, title, width, anchor in (
-            ("id", "ID", 130, "center"),
-            ("nombre", "Nombre", 330, "w"),
-            ("fotos", "Fotos", 70, "center"),
+            ("cedula", "Cédula", 140, "center"),
+            ("nombre", "Apellidos y nombres (A-Z)", 420, "w"),
         ):
             self._students_tree.heading(column, text=title)
             self._students_tree.column(column, width=width, anchor=anchor, stretch=column == "nombre")
@@ -113,13 +110,6 @@ class CoursesTab(ttk.Frame):
             style="Card.TCheckbutton",
             command=self._toggle_schedule,
         ).pack(anchor="w", pady=(8, 0))
-        ttk.Checkbutton(
-            detail,
-            text="Terminar antes si todos los estudiantes ya fueron reconocidos",
-            variable=self._finish_var,
-            style="Card.TCheckbutton",
-            command=self._toggle_finish,
-        ).pack(anchor="w", pady=(2, 0))
 
     def _current(self) -> Course | None:
         return self._state.repository.get(self._selected_id)
@@ -161,12 +151,11 @@ class CoursesTab(ttk.Frame):
         self._title_var.set(course.name)
         self._excel_var.set(course.excel_path)
         self._enabled_var.set(course.schedule_enabled)
-        self._finish_var.set(course.finish_when_complete)
         self._students_tree.delete(*self._students_tree.get_children())
         for student in course.students:
             self._students_tree.insert(
                 "", "end", iid=student.student_id,
-                values=(student.student_id, student.name, len(student.embeddings)),
+                values=(student.student_id, student.name),
             )
         self._slots_tree.delete(*self._slots_tree.get_children())
         for index, slot in enumerate(course.slots):
@@ -278,11 +267,20 @@ class CoursesTab(ttk.Frame):
         if course is None or self._locked():
             return
         try:
-            camera = Camera(self._state.settings.camera_index)
+            camera = self._state.open_camera()
         except CameraError as error:
             messagebox.showerror(APP_TITLE, str(error))
             return
-        RegistrationDialog(self, self._state.engine, camera, course.name, self._student_saved)
+        taken = {student.student_id for student in course.students}
+        RegistrationDialog(
+            self,
+            self._state.engine,
+            self._state.eyes,
+            camera,
+            course.name,
+            lambda cedula: cedula in taken,
+            self._student_saved,
+        )
 
     def _student_saved(self, student: Student) -> None:
         updated = self._save_update(lambda course: course.add_student(student))
@@ -305,7 +303,7 @@ class CoursesTab(ttk.Frame):
         student_id = selection[0]
         if messagebox.askyesno(
             APP_TITLE,
-            f"¿Quitar al estudiante {student_id} de este curso?\nSu fila en el Excel se conserva.",
+            f"¿Quitar la cédula {student_id} de este curso?\nSu fila en el Excel se conserva.",
         ):
             self._run(lambda course: course.remove_student(student_id))
 
@@ -335,10 +333,3 @@ class CoursesTab(ttk.Frame):
                 APP_TITLE, "Agrega al menos un horario para que la lista automática funcione."
             )
         self._run(lambda c: replace(c, schedule_enabled=enabled))
-
-    def _toggle_finish(self) -> None:
-        if self._locked():
-            self._show_selected()
-            return
-        finish = self._finish_var.get()
-        self._run(lambda c: replace(c, finish_when_complete=finish))

@@ -15,6 +15,7 @@ from ..config import (
 )
 from .attendance_tab import AttendanceTab
 from .courses_tab import CoursesTab
+from .scrollable import ScrollableFrame
 from .settings_tab import SettingsTab
 from .state import AppState
 
@@ -33,15 +34,15 @@ class MainWindow:
         self._header_logo = ImageTk.PhotoImage(make_logo(44))
         self._clock_var = tk.StringVar()
         root.title(APP_TITLE)
-        root.geometry("1120x780")
-        root.minsize(1040, 740)
+        width = min(1120, root.winfo_screenwidth() - 60)
+        height = min(780, root.winfo_screenheight() - 110)
+        root.geometry(f"{width}x{height}+30+20")
+        root.minsize(1040, 520)
         self._build_header()
-        self._attendance = AttendanceTab(self._build_notebook_host(), state)
-        self._notebook.add(self._attendance, text="  Tomar lista  ")
-        self._courses = CoursesTab(self._notebook, state)
-        self._notebook.add(self._courses, text="  Cursos  ")
-        self._settings = SettingsTab(self._notebook, state)
-        self._notebook.add(self._settings, text="  Ajustes  ")
+        self._build_notebook_host()
+        self._attendance = self._add_tab(AttendanceTab, "  Tomar lista  ")
+        self._courses = self._add_tab(CoursesTab, "  Cursos  ")
+        self._settings = self._add_tab(SettingsTab, "  Ajustes  ")
         root.protocol("WM_DELETE_WINDOW", self._on_close)
         for warning in warnings:
             messagebox.showwarning(APP_TITLE, warning, parent=root)
@@ -72,6 +73,13 @@ class MainWindow:
         self._notebook = ttk.Notebook(self._root)
         self._notebook.pack(fill="both", expand=True, padx=8, pady=(8, 8))
         return self._notebook
+
+    def _add_tab(self, factory, title: str):
+        holder = ScrollableFrame(self._notebook)
+        content = factory(holder.body, self._state)
+        content.pack(fill="both", expand=True)
+        self._notebook.add(holder, text=title)
+        return content
 
     def _tick(self) -> None:
         self._root.after(1000, self._tick)

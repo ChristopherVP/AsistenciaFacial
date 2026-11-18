@@ -2,7 +2,9 @@ from __future__ import annotations
 
 from typing import Callable
 
+from ..camera import Camera, resolve_camera_index
 from ..face_engine import FaceEngine
+from ..liveness import EyeStateDetector
 from ..models import AppSettings, Course
 from ..storage import CourseRepository, SettingsRepository
 
@@ -11,11 +13,13 @@ class AppState:
     def __init__(
         self,
         engine: FaceEngine,
+        eyes: EyeStateDetector,
         repository: CourseRepository,
         settings_repository: SettingsRepository,
         settings: AppSettings,
     ) -> None:
         self.engine = engine
+        self.eyes = eyes
         self.repository = repository
         self.settings = settings
         self.session_active = False
@@ -37,3 +41,9 @@ class AppState:
     def update_settings(self, settings: AppSettings) -> None:
         self._settings_repository.save(settings)
         self.settings = settings
+
+    def open_camera(self) -> Camera:
+        index = resolve_camera_index(
+            self.settings.camera_name, self.settings.camera_index
+        )
+        return Camera(index)

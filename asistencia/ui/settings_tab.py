@@ -75,12 +75,34 @@ class SettingsTab(ttk.Frame):
             card, text="💾  Guardar ajustes", style="Primary.TButton", command=self._save
         ).pack(anchor="w", pady=(16, 0))
 
-    def _selected_index(self) -> int | None:
+    def _selected_camera(self) -> CameraInfo | None:
         label = self._camera_var.get()
-        for info in self._cameras:
-            if info.label == label:
-                return info.index
-        return None
+        return next((info for info in self._cameras if info.label == label), None)
+
+    @staticmethod
+    def _describe(cameras: tuple[CameraInfo, ...], chosen: CameraInfo) -> str:
+        kinds = {info.kind for info in cameras}
+        if len(cameras) == 1 and chosen.kind == "integrated":
+            return (
+                "Solo se detectó la cámara de la laptop. Conecta la webcam externa y "
+                "pulsa Buscar cámaras para que aparezca."
+            )
+        if len(cameras) == 1 and chosen.kind == "external":
+            return f"Se detectó la webcam externa: {chosen.name}. Pulsa Guardar ajustes."
+        if len(cameras) == 1:
+            return (
+                f"Se detectó una cámara: {chosen.name}. Pulsa Probar cámara para confirmar "
+                "cuál es y luego Guardar ajustes."
+            )
+        if kinds >= {"integrated", "external"}:
+            return (
+                "Se detectaron la cámara de la laptop y la webcam externa. "
+                "Se seleccionó la webcam; pulsa Guardar ajustes."
+            )
+        return (
+            f"Se detectaron {len(cameras)} cámaras. Elige una y usa Probar cámara "
+            "para confirmar cuál es."
+        )
 
     def refresh_cameras(self) -> None:
         if self._state.session_active:
@@ -100,26 +122,27 @@ class SettingsTab(ttk.Frame):
                 "Luego pulsa Buscar cámaras."
             )
             return
+        settings = self._state.settings
         saved = next(
-            (info for info in cameras if info.index == self._state.settings.camera_index), None
+            (
+                info
+                for info in cameras
+                if (settings.camera_name and info.name == settings.camera_name)
+                or (not settings.camera_name and info.index == settings.camera_index)
+            ),
+            None,
         )
-        chosen = saved if len(cameras) == 1 or saved is not None else cameras[-1]
+        external = next((info for info in cameras if info.kind == "external"), None)
+        chosen = saved or external or cameras[-1]
         self._camera_var.set(chosen.label)
-        if len(cameras) == 1:
-            self._camera_status_var.set(
-                f"Solo se detectó una cámara: {chosen.name}. Si es la integrada de la laptop, "
-                "conecta la webcam y pulsa Buscar cámaras para que aparezca."
-            )
-        else:
-            self._camera_status_var.set(
-                f"Se detectaron {len(cameras)} cámaras. Elige la webcam externa y pulsa Guardar ajustes."
-            )
+        self._camera_status_var.set(self._describe(cameras, chosen))
 
     def _test_camera(self) -> None:
-        index = self._selected_index()
-        if index is None:
+        selected = self._selected_camera()
+        if selected is None:
             messagebox.showinfo(APP_TITLE, "No hay cámara seleccionada. Pulsa Buscar cámaras primero.")
             return
+        index = selected.index
         if self._state.session_active:
             messagebox.showinfo(APP_TITLE, "Finaliza la lista en curso antes de probar la cámara.")
             return
@@ -136,7 +159,7 @@ class SettingsTab(ttk.Frame):
             messagebox.showerror(APP_TITLE, "La cámara abrió pero no entregó imagen.")
             return
         window = tk.Toplevel(self)
-        window.title(f"Vista previa de la cámara {index}")
+        window.title(f"Vista previa · {selected.label}")
         view = CameraView(window, "")
         view.pack(padx=12, pady=12)
         view.show(render_frame(frame, ()))
@@ -148,8 +171,8 @@ class SettingsTab(ttk.Frame):
         ttk.Button(window, text="Cerrar", command=window.destroy).pack(pady=(0, 12))
 
     def _save(self) -> None:
-        camera_index = self._selected_index()
-        if camera_index is None:
+        selected = self._selected_camera()
+        if selected is None:
             messagebox.showerror(
                 APP_TITLE, "Elige una cámara de la lista. Si está vacía, pulsa Buscar cámaras."
             )
@@ -170,7 +193,8 @@ class SettingsTab(ttk.Frame):
             return
         settings = replace(
             self._state.settings,
-            camera_index=camera_index,
+            camera_index=selected.index,
+            camera_name=selected.name,
             threshold=threshold,
             manual_minutes=manual,
         )

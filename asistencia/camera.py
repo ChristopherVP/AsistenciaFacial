@@ -12,6 +12,27 @@ from .config import MAX_CAMERA_INDEX, VIEW_HEIGHT, VIEW_WIDTH
 from .errors import CameraError
 from .models import CameraInfo, FaceResult
 
+INTEGRATED_HINTS = (
+    "integrated",
+    "internal",
+    "built-in",
+    "builtin",
+    "laptop",
+    "hp wide vision",
+    "hp truevision",
+    "hp true vision",
+    "hp webcam",
+    "hp hd camera",
+    "facetime",
+    "front camera",
+    "surface camera",
+    "integrada",
+    "frontal",
+)
+EXTERNAL_HINTS = ("usb", "webcam", "web cam", "external", "logitech", "pc camera", "hd full")
+
+Banner = tuple[str, tuple[int, int, int]]
+
 
 class Camera:
     def __init__(self, index: int) -> None:
@@ -46,10 +67,46 @@ def device_names() -> list[str]:
         return []
 
 
+def resolve_camera_index(name: str, fallback: int) -> int:
+    if not name:
+        return fallback
+    names = device_names()
+    if not names:
+        return fallback
+    if name not in names:
+        raise CameraError(
+            f"No se encuentra la cámara «{name}». Conéctala y pulsa Buscar cámaras en Ajustes."
+        )
+    return names.index(name)
+
+
+def classify_camera(name: str) -> str:
+    lowered = name.lower()
+    if any(hint in lowered for hint in INTEGRATED_HINTS):
+        return "integrated"
+    if any(hint in lowered for hint in EXTERNAL_HINTS):
+        return "external"
+    return "unknown"
+
+
+def assign_kinds(entries: Sequence[tuple[int, str]]) -> tuple[CameraInfo, ...]:
+    kinds = [classify_camera(name) for _, name in entries]
+    if len(entries) >= 2:
+        if "integrated" in kinds:
+            kinds = ["external" if kind == "unknown" else kind for kind in kinds]
+        elif "external" in kinds:
+            kinds = ["integrated" if kind == "unknown" else kind for kind in kinds]
+        else:
+            kinds = ["integrated", *["external"] * (len(kinds) - 1)]
+    return tuple(
+        CameraInfo(index, name, kind) for (index, name), kind in zip(entries, kinds)
+    )
+
+
 def detect_cameras() -> tuple[CameraInfo, ...]:
     names = device_names()
     candidates = len(names) if names else MAX_CAMERA_INDEX
-    found: list[CameraInfo] = []
+    found: list[tuple[int, str]] = []
     for index in range(candidates):
         try:
             camera = Camera(index)
@@ -62,29 +119,38 @@ def detect_cameras() -> tuple[CameraInfo, ...]:
                 break
         camera.release()
         if frame is not None:
-            name = names[index] if index < len(names) else f"Cámara {index}"
-            found.append(CameraInfo(index, name))
-    return tuple(found)
+            found.append((index, names[index] if index < len(names) else f"Cámara {index}"))
+    return assign_kinds(found)
 
 
-@lru_cache(maxsize=1)
-def label_font() -> ImageFont.ImageFont:
+@lru_cache(maxsize=4)
+def label_font(size: int = 18) -> ImageFont.ImageFont:
     try:
-        return ImageFont.truetype("arial.ttf", 18)
+        return ImageFont.truetype("arial.ttf", size)
     except OSError:
         return ImageFont.load_default()
 
 
-def render_frame(frame: np.ndarray, results: Sequence[FaceResult]) -> Image.Image:
+def render_frame(
+    frame: np.ndarray,
+    results: Sequence[FaceResult],
+    banner: Banner | None = None,
+) -> Image.Image:
     image = Image.fromarray(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
     draw = ImageDraw.Draw(image)
-    font = label_font()
+    font = label_font(18)
     for result in results:
         x, y, w, h = result.box
         color = (46, 139, 87) if result.recognized else (176, 58, 46)
         draw.rectangle((x, y, x + w, y + h), outline=color, width=3)
+        if not result.label:
+            continue
         text_y = max(0, y - 26)
         left, top, right, bottom = draw.textbbox((x, text_y), result.label, font=font)
         draw.rectangle((left - 4, top - 2, right + 4, bottom + 2), fill=color)
         draw.text((x, text_y), result.label, fill="white", font=font)
+    if banner is not None:
+        text, color = banner
+        draw.rectangle((0, 0, image.width, 46), fill=color)
+        draw.text((14, 9), text, fill="white", font=label_font(24))
     return image

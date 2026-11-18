@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import ctypes
 import sys
+from pathlib import Path
 import time as clock
 import tkinter as tk
 from tkinter import ttk
@@ -13,6 +14,7 @@ from .config import (
     APP_TITLE,
     COLOR_PRIMARY,
     FONT_FAMILY,
+    ICON_FILE,
 )
 
 WHITE = (255, 255, 255, 255)
@@ -52,14 +54,38 @@ def make_logo(size: int = 256) -> Image.Image:
     return image.resize((size, size), Image.Resampling.LANCZOS)
 
 
+def prepare_windows_identity() -> None:
+    if not sys.platform.startswith("win"):
+        return
+    try:
+        ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(APP_ID)
+    except (AttributeError, OSError) as error:
+        print(f"No se pudo registrar la identidad de la aplicación: {error}", file=sys.stderr)
+
+
+def ensure_icon_file() -> Path | None:
+    try:
+        ICON_FILE.parent.mkdir(parents=True, exist_ok=True)
+        make_logo(256).save(
+            ICON_FILE,
+            format="ICO",
+            sizes=[(16, 16), (24, 24), (32, 32), (48, 48), (64, 64), (128, 128), (256, 256)],
+        )
+    except OSError as error:
+        print(f"No se pudo crear el icono: {error}", file=sys.stderr)
+        return None
+    return ICON_FILE
+
+
 def install_icon(root: tk.Tk) -> ImageTk.PhotoImage:
-    if sys.platform.startswith("win"):
-        try:
-            ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(APP_ID)
-        except (AttributeError, OSError):
-            pass
     photo = ImageTk.PhotoImage(make_logo(64))
     root.iconphoto(True, photo)
+    icon_path = ensure_icon_file()
+    if icon_path is not None and sys.platform.startswith("win"):
+        try:
+            root.iconbitmap(default=str(icon_path))
+        except tk.TclError as error:
+            print(f"No se pudo aplicar el icono de ventana: {error}", file=sys.stderr)
     return photo
 
 
