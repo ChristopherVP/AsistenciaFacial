@@ -5,21 +5,23 @@ from typing import Callable
 
 from ..config import (
     COLOR_ACCENT,
-    COLOR_BORDER,
     COLOR_MUTED,
+    COLOR_PRIMARY,
     COLOR_SUCCESS,
     COLOR_TEXT,
     FONT_FAMILY,
 )
 from ..errors import AppError
 
-WIDTH = 400
-HEIGHT = 92
-TOP_GAP = 78  # justo debajo del encabezado azul
+WIDTH = 420
+TOP_GAP = 80  # justo debajo del encabezado azul
 SLIDE_FRAMES = 14
 SLIDE_DELAY_MS = 16
 AUTO_HIDE_MS = 15_000
 RESULT_MS = 1_800
+BORDER = "#C9D3DE"
+HOVER_SOFT = "#E8F1FA"
+HOVER_STRONG = "#1F6FA5"
 
 
 class SavePrompt(tk.Frame):
@@ -30,45 +32,59 @@ class SavePrompt(tk.Frame):
     """
 
     def __init__(self, root: tk.Misc, on_save: Callable[[], None]) -> None:
-        super().__init__(
-            root, bg="white", width=WIDTH, height=HEIGHT,
-            highlightthickness=1, highlightbackground=COLOR_BORDER,
-        )
-        self.pack_propagate(False)
+        super().__init__(root, bg=BORDER)  # el marco de 1 px lo da este fondo
         self._on_save = on_save
         self._slide_job: str | None = None
         self._hide_job: str | None = None
-        self._y = -HEIGHT
-        self._title = tk.Label(
-            self, text="🔑  ¿Guardar usuario?", bg="white", fg=COLOR_TEXT,
-            font=(FONT_FAMILY, 11, "bold"), anchor="w",
-        )
-        self._title.pack(fill="x", padx=14, pady=(10, 0))
-        self._detail = tk.Label(
-            self, text="Entra con un solo clic la próxima vez. Puedes cambiarlo en Ajustes.",
-            bg="white", fg=COLOR_MUTED, font=(FONT_FAMILY, 9), anchor="w",
-            justify="left", wraplength=WIDTH - 60,
-        )
-        self._detail.pack(fill="x", padx=14)
-        self._buttons = tk.Frame(self, bg="white")
-        self._buttons.pack(side="bottom", anchor="e", padx=10, pady=(0, 8))
-        self._button(self._buttons, "Ahora no", COLOR_ACCENT, "white", self.dismiss)
-        self._button(self._buttons, "Guardar", "white", COLOR_ACCENT, self._save)
-        close = tk.Label(self, text="✕", bg="white", fg=COLOR_MUTED, cursor="hand2", font=(FONT_FAMILY, 10))
-        close.place(relx=1.0, x=-8, y=6, anchor="ne")
-        close.bind("<Button-1>", lambda _event: self.dismiss())
-        self._place_at(-HEIGHT)
+        self._y = 0
+        self._height = 0
+        self._build()
+        self.update_idletasks()
+        self._height = self.winfo_reqheight()
+        self._place_at(-self._height)
         self.lift()
         self._slide(TOP_GAP, None)
         self._hide_job = self.after(AUTO_HIDE_MS, self.dismiss)
 
-    @staticmethod
-    def _button(parent: tk.Misc, text: str, bg: str, fg: str, command: Callable[[], None]) -> None:
-        tk.Button(
-            parent, text=text, command=command, bg=bg, fg=fg, relief="flat", cursor="hand2",
-            activebackground="#EAF2FB" if bg == "white" else "#1F6FA5", activeforeground=fg if bg == "white" else "white",
-            font=(FONT_FAMILY, 10, "bold"), padx=14, pady=4, borderwidth=0,
-        ).pack(side="right", padx=(6, 0))
+    def _build(self) -> None:
+        card = tk.Frame(self, bg="white")
+        card.pack(padx=1, pady=1)
+        tk.Frame(card, bg=COLOR_ACCENT, height=4, width=WIDTH).pack(fill="x")
+        content = tk.Frame(card, bg="white")
+        content.pack(fill="x", padx=16, pady=(12, 12))
+        icon = tk.Canvas(content, width=44, height=44, bg="white", highlightthickness=0)
+        icon.create_oval(2, 2, 42, 42, fill="#EAF2FB", outline="")
+        icon.create_text(22, 22, text="🔑", font=(FONT_FAMILY, 15), fill=COLOR_PRIMARY)
+        icon.grid(row=0, column=0, rowspan=2, sticky="n", padx=(0, 12))
+        self._title = tk.Label(
+            content, text="¿Guardar usuario?", bg="white", fg=COLOR_TEXT,
+            font=(FONT_FAMILY, 12, "bold"), anchor="w",
+        )
+        self._title.grid(row=0, column=1, sticky="w")
+        self._detail = tk.Label(
+            content, text="Entra con un solo clic la próxima vez.\nPuedes cambiarlo en Ajustes.",
+            bg="white", fg=COLOR_MUTED, font=(FONT_FAMILY, 10), anchor="w", justify="left",
+        )
+        self._detail.grid(row=1, column=1, sticky="w", pady=(2, 0))
+        close = tk.Label(content, text="✕", bg="white", fg=COLOR_MUTED, cursor="hand2", font=(FONT_FAMILY, 11))
+        close.grid(row=0, column=2, sticky="ne", padx=(10, 0))
+        close.bind("<Button-1>", lambda _event: self.dismiss())
+        content.columnconfigure(1, weight=1)
+        self._buttons = tk.Frame(card, bg="white")
+        self._buttons.pack(fill="x", padx=14, pady=(0, 12))
+        # Se empaquetan de derecha a izquierda: «Guardar» queda al extremo, «Ahora no» a su lado.
+        self._button("Guardar", COLOR_ACCENT, "white", HOVER_STRONG, self._save)
+        self._button("Ahora no", "white", COLOR_ACCENT, HOVER_SOFT, self.dismiss)
+
+    def _button(self, text: str, bg: str, fg: str, hover: str, command: Callable[[], None]) -> None:
+        button = tk.Label(
+            self._buttons, text=text, bg=bg, fg=fg, cursor="hand2", padx=18, pady=7,
+            font=(FONT_FAMILY, 10, "bold"),
+        )
+        button.pack(side="right", padx=(8, 0))
+        button.bind("<Button-1>", lambda _event: command())
+        button.bind("<Enter>", lambda _event: button.configure(bg=hover))
+        button.bind("<Leave>", lambda _event: button.configure(bg=bg))
 
     def _place_at(self, y: int) -> None:
         self._y = y
@@ -104,7 +120,7 @@ class SavePrompt(tk.Frame):
 
     def _show_result(self, text: str, color: str) -> None:
         self._buttons.pack_forget()
-        self._detail.pack_forget()
+        self._detail.grid_forget()
         self._title.configure(text=text, fg=color)
         self._hide_job = self.after(RESULT_MS, self.dismiss)
 
@@ -112,7 +128,7 @@ class SavePrompt(tk.Frame):
         self._cancel(self._hide_job)
         self._hide_job = None
         self._cancel(self._slide_job)
-        self._slide(-HEIGHT - 4, self.destroy)
+        self._slide(-self._height - 4, self.destroy)
 
     def destroy(self) -> None:
         self._cancel(self._hide_job)

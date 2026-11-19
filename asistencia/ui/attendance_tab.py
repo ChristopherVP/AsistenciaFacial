@@ -30,6 +30,7 @@ from ..errors import AttendanceError, CameraError
 from ..face_engine import Gallery
 from ..models import Course, FaceResult, RecordResult, Slot, parse_time
 from ..scheduler import describe_next, due_courses
+from ..voice import Speaker
 from .state import AppState
 from .widgets import Card, CameraView, StatCard, Table, make_chip, set_chip
 
@@ -40,6 +41,9 @@ NOTICE_COLORS = {
     "error": COLOR_DANGER,
 }
 GRAY = "#7F8C8D"
+ALL_PRESENT_DELAY_MS = 1500  # deja ver el último «registrado» antes de guardar
+END_WARNING_SECONDS = 60
+SAY_ALL_PRESENT = "Lista guardada. Todos los estudiantes han asistido."
 
 
 @dataclass(frozen=True)
@@ -78,6 +82,10 @@ class AttendanceTab(ttk.Frame):
         self._notice_job: str | None = None
         self._final: ListSnapshot | None = None
         self._auto_attempts: set[tuple[str, str]] = set()
+        self._speaker = Speaker()
+        self._saved_ok = False
+        self._all_present_job: str | None = None
+        self._end_warned = False
         self._course_ids: dict[str, str] = {}
         self._course_var = tk.StringVar()
         self._status_var = tk.StringVar()
@@ -295,6 +303,10 @@ class AttendanceTab(ttk.Frame):
         window.after(1500, lambda: window.attributes("-topmost", False))
         end = datetime.combine(now.date(), parse_time(slot.end))
         self._begin(course, end, automatic=True)
+        if self._session is not None:  # la cámara abrió bien
+            self._speaker.speak(
+                f"La lista de {course.name} va a empezar. Acérquese a la cámara para registrarse."
+            )
 
     def _begin(self, course: Course, end: datetime | None, automatic: bool) -> None:
         try:
@@ -323,6 +335,8 @@ class AttendanceTab(ttk.Frame):
         )
         self._session_start = datetime.now()
         self._session_end = end
+        self._end_warned = False
+        self._saved_ok = False
         self._timer_caption_var.set(
             "Tiempo transcurrido (termina al pulsar «Finalizar y guardar»)"
             if end is None
@@ -374,6 +388,26 @@ class AttendanceTab(ttk.Frame):
                 self._show_notice(f"ℹ  {name}  ya está registrado", "warning")
         if registered:
             self._render_roster()
+            self._check_all_present()
+
+    def _all_present(self) -> bool:
+        if self._session is None or self._course is None or not self._course.students:
+            return False
+        present = self._session.present
+        return all(student.student_id in present for student in self._course.students)
+
+    def _check_all_present(self) -> None:
+        if self._all_present() and self._all_present_job is None:
+            self._show_notice("✔  Todos asistieron · guardando la lista…", "success", ALL_PRESENT_DELAY_MS * 2)
+            self._all_present_job = self.after(ALL_PRESENT_DELAY_MS, self._finish_all_present)
+
+    def _finish_all_present(self) -> None:
+        self._all_present_job = None
+        if not self._all_present():  # el usuario ya finalizó a mano
+            return
+        self.finish_session()
+        if self._saved_ok:
+            self._speaker.speak(SAY_ALL_PRESENT)
 
     def _frame_loop(self) -> None:
         if self._session is None or self._camera is None:
@@ -403,6 +437,9 @@ class AttendanceTab(ttk.Frame):
         self._session = None
         self._course = None
         self._column = None
+        if self._all_present_job is not None:
+            self.after_cancel(self._all_present_job)
+            self._all_present_job = None
         if self._loop_id is not None:
             self.after_cancel(self._loop_id)
             self._loop_id = None
@@ -432,6 +469,7 @@ class AttendanceTab(ttk.Frame):
             set_chip(self._chip, "ERROR", COLOR_DANGER)
             self._show_notice("La lista no se guardó en el Excel", "error", NOTICE_MS * 2)
         else:
+            self._saved_ok = True
             self._status_var.set(f"Lista guardada · {course.name} · {self._final.moment:%d/%m/%Y %H:%M}")
             set_chip(self._chip, "FINALIZADA", GRAY)
             self._show_notice(
@@ -480,6 +518,13 @@ class AttendanceTab(ttk.Frame):
             self.finish_session()
             return
         self._update_timer(now)
+        if (
+            self._session_end is not None
+            and not self._end_warned
+            and (self._session_end - now).total_seconds() <= END_WARNING_SECONDS
+        ):
+            self._end_warned = True
+            self._speaker.speak("Queda un minuto para finalizar la lista.")
 
     def _update_timer(self, now: datetime) -> None:
         """Manual: cronómetro desde que se pulsó «Iniciar». Automática: cuenta regresiva."""

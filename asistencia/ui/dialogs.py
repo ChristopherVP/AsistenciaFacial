@@ -35,6 +35,8 @@ from ..face_engine import FaceEngine
 from ..models import FaceResult, Slot, Student, parse_time
 from ..validators import (
     allows_cedula_input,
+    allows_hour_input,
+    allows_minute_input,
     allows_name_input,
     normalize_full_name,
     validate_cedula,
@@ -389,6 +391,8 @@ class SlotDialog(tk.Toplevel):
         self._end_hour = tk.StringVar(value="07")
         self._end_minute = tk.StringVar(value="20")
         self._summary_var = tk.StringVar()
+        self._hour_check = (self.register(allows_hour_input), "%P")
+        self._minute_check = (self.register(allows_minute_input), "%P")
         self._build()
         for variable in (*self._day_vars, self._start_hour, self._start_minute, self._end_hour, self._end_minute):
             variable.trace_add("write", lambda *_: self._refresh_summary())
@@ -406,9 +410,23 @@ class SlotDialog(tk.Toplevel):
         row = tk.Frame(box, bg="white")
         row.pack(padx=12, pady=(2, 10))
         spin = {"font": (FONT_FAMILY, 20, "bold"), "width": 3, "wrap": True, "format": "%02.0f"}
-        ttk.Spinbox(row, from_=0, to=23, textvariable=hour, **spin).pack(side="left")
+        # validate="key": solo deja escribir dígitos, hora 0-23 y minutos 0-59.
+        hour_box = ttk.Spinbox(
+            row, from_=0, to=23, textvariable=hour, validate="key", validatecommand=self._hour_check, **spin
+        )
+        hour_box.pack(side="left")
         tk.Label(row, text=":", bg="white", fg=COLOR_TEXT, font=(FONT_FAMILY, 20, "bold")).pack(side="left", padx=3)
-        ttk.Spinbox(row, from_=0, to=59, textvariable=minute, **spin).pack(side="left")
+        minute_box = ttk.Spinbox(
+            row, from_=0, to=59, textvariable=minute, validate="key", validatecommand=self._minute_check, **spin
+        )
+        minute_box.pack(side="left")
+        for box, variable in ((hour_box, hour), (minute_box, minute)):
+            box.bind("<FocusOut>", lambda _event, var=variable: self._pad(var))
+
+    @staticmethod
+    def _pad(variable: tk.StringVar) -> None:
+        """Al salir del campo: vacío → 00 y siempre dos dígitos (7 → 07)."""
+        variable.set(f"{int(variable.get() or 0):02d}")
 
     def _build(self) -> None:
         build_header(self, "Agregar horario", "La lista solo se toma dentro del intervalo").pack(fill="x")
@@ -463,8 +481,11 @@ class SlotDialog(tk.Toplevel):
         )
 
     def _times(self) -> tuple[str, str]:
-        start = f"{int(self._start_hour.get()):02d}:{int(self._start_minute.get()):02d}"
-        end = f"{int(self._end_hour.get()):02d}:{int(self._end_minute.get()):02d}"
+        def part(variable: tk.StringVar) -> int:
+            return int(variable.get() or 0)  # el campo solo admite dígitos; vacío cuenta como 0
+
+        start = f"{part(self._start_hour):02d}:{part(self._start_minute):02d}"
+        end = f"{part(self._end_hour):02d}:{part(self._end_minute):02d}"
         return start, end
 
     def _apply_duration(self, minutes: int) -> None:
@@ -493,6 +514,8 @@ class SlotDialog(tk.Toplevel):
         self._summary_label.configure(fg=COLOR_PRIMARY)
 
     def _save(self) -> None:
+        for variable in (self._start_hour, self._start_minute, self._end_hour, self._end_minute):
+            self._pad(variable)
         days = tuple(index for index, var in enumerate(self._day_vars) if var.get())
         try:
             start, end = self._times()

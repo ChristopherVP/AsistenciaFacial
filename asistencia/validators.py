@@ -25,6 +25,27 @@ USERNAME_PATTERN = re.compile(
 )
 
 
+TIME_PART_PATTERN = re.compile(r"^[0-9]{0,2}$")
+MAX_HOUR = 23
+MAX_MINUTE = 59
+
+
+def _allows_time_part(text: str, maximum: int) -> bool:
+    if TIME_PART_PATTERN.match(text) is None:
+        return False
+    return not text or int(text) <= maximum
+
+
+def allows_hour_input(text: str) -> bool:
+    """Solo dígitos, 0 a 23 (máximo 24 horas)."""
+    return _allows_time_part(text, MAX_HOUR)
+
+
+def allows_minute_input(text: str) -> bool:
+    """Solo dígitos, 0 a 59 (máximo 60 minutos)."""
+    return _allows_time_part(text, MAX_MINUTE)
+
+
 def allows_cedula_input(text: str) -> bool:
     return CEDULA_INPUT_PATTERN.match(text) is not None
 

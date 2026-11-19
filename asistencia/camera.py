@@ -67,6 +67,7 @@ POWERSHELL_TIMEOUT_SECONDS = 15
 CAMERA_NAMES_SCRIPT = (
     "[Console]::OutputEncoding=[System.Text.Encoding]::UTF8;"
     "Get-PnpDevice -Class Camera -PresentOnly -ErrorAction SilentlyContinue | "
+    "Where-Object { $_.Status -eq 'OK' } | "
     "Select-Object -ExpandProperty FriendlyName"
 )
 
@@ -140,16 +141,20 @@ def _delivers_frames(index: int) -> bool:
         camera.release()
 
 
-def detect_cameras() -> tuple[CameraInfo, ...]:
+def detect_cameras(probe: bool = False) -> tuple[CameraInfo, ...]:
     """Lista las cámaras por su nombre real (como en el Administrador de dispositivos).
-    Con nombres reales también muestra las que no se pudieron abrir, marcadas como
-    no disponibles (por ejemplo, en uso por otra aplicación)."""
+
+    Por defecto NO abre ninguna cámara (así no se enciende la luz). La cámara solo se
+    abre al «Probar» o al tomar lista. Con probe=True se abre cada una para comprobar
+    cuáles entregan imagen."""
     names = device_names()
+    if not names and not probe:
+        return (CameraInfo(0, "Cámara 0", "unknown", True),)
     candidates = len(names) if names else MAX_CAMERA_INDEX
     found: list[CameraInfo] = []
     for index in range(candidates):
         name = names[index] if index < len(names) else f"Cámara {index}"
-        available = _delivers_frames(index)
+        available = _delivers_frames(index) if probe else True
         if not available and not names:
             continue
         found.append(CameraInfo(index, name, classify_camera(name), available))
