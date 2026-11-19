@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import re
 from pathlib import Path
+from typing import NamedTuple
 
 APP_TITLE = "Asistencia Facial"
 APP_ID = "AsistenciaFacial.App"
@@ -49,13 +50,42 @@ SCAN_TIMEOUT_SECONDS = 60.0
 REMIND_SECONDS = 8.0
 MAX_YAW_RATIO = 0.25
 MAX_ROLL_RATIO = 0.30
-MANUAL_SESSION_MINUTES = 20
+
+
+
+class PrecisionLevel(NamedTuple):
+    """Cómo decide el sistema que un rostro es de un estudiante.
+
+    threshold:      parecido mínimo (coseno) con el rostro registrado.
+    margin:         ventaja mínima sobre el SEGUNDO estudiante más parecido; si dos personas
+                    se parecen casi igual, no se marca a ninguna (evita confundirlas).
+    confirm_frames: lecturas seguidas del mismo estudiante antes de marcarlo presente.
+    """
+
+    name: str
+    threshold: float
+    margin: float
+    confirm_frames: int
+    description: str
+
 
 PRECISION_LEVELS = (
-    ("Flexible", 0.33, "Reconoce con más facilidad. Úselo si el sistema no reconoce a los estudiantes."),
-    ("Equilibrado", 0.40, "Recomendado para la mayoría de los casos."),
-    ("Estricto", 0.50, "Evita confundir a una persona con otra. Úselo si hay falsos registros."),
+    PrecisionLevel(
+        "Flexible", 0.33, 0.00, 2,
+        "Reconoce con más facilidad. Úselo si el sistema no reconoce a los estudiantes.",
+    ),
+    PrecisionLevel("Equilibrado", 0.40, 0.05, CONFIRM_FRAMES, "Recomendado para la mayoría de los casos."),
+    PrecisionLevel(
+        "Estricto", 0.50, 0.10, 5,
+        "Evita confundir a una persona con otra. Úselo si hay falsos registros.",
+    ),
 )
+
+
+def precision_for(threshold: float) -> PrecisionLevel:
+    """Nivel guardado en los ajustes (solo se persiste el umbral)."""
+    return min(PRECISION_LEVELS, key=lambda level: abs(level.threshold - threshold))
+
 
 MIN_USERNAME_LENGTH = 4
 MAX_USERNAME_LENGTH = 20

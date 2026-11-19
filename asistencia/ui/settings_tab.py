@@ -15,6 +15,7 @@ from ..config import (
     FONT_FAMILY,
     NOTICE_MS,
     PRECISION_LEVELS,
+    precision_for,
 )
 from ..errors import AuthError, CameraError
 from ..models import CameraInfo
@@ -36,8 +37,7 @@ class SettingsTab(ttk.Frame):
         user = state.current_user
         self._remember_var = tk.BooleanVar(value=bool(user and user.remembered))
         self._account_status_var = tk.StringVar()
-        nearest = min(PRECISION_LEVELS, key=lambda level: abs(level[1] - state.settings.threshold))
-        self._precision_var = tk.StringVar(value=nearest[0])
+        self._precision_var = tk.StringVar(value=precision_for(state.settings.threshold).name)
         self._build()
 
     def _build(self) -> None:
@@ -76,13 +76,16 @@ class SettingsTab(ttk.Frame):
             style="Hint.TLabel",
             wraplength=900,
         ).pack(anchor="w", pady=(4, 8))
-        for name, _threshold, description in PRECISION_LEVELS:
+        for level in PRECISION_LEVELS:
             row = ttk.Frame(precision_card.body, style="Card.TFrame")
             row.pack(fill="x", pady=2)
             ttk.Radiobutton(
-                row, text=name, value=name, variable=self._precision_var, style="Card.TRadiobutton"
+                row, text=level.name, value=level.name, variable=self._precision_var,
+                style="Card.TRadiobutton",
             ).pack(side="left")
-            ttk.Label(row, text=f"—  {description}", style="Hint.TLabel").pack(side="left", padx=(8, 0))
+            ttk.Label(row, text=f"—  {level.description}", style="Hint.TLabel").pack(
+                side="left", padx=(8, 0)
+            )
         actions = ttk.Frame(self)
         actions.pack(fill="x", pady=(14, 0))
         ttk.Button(actions, text="💾  Guardar ajustes", style="Primary.TButton", command=self._save).pack(
@@ -120,6 +123,11 @@ class SettingsTab(ttk.Frame):
         ttk.Label(card.body, textvariable=self._account_status_var, style="Success.TLabel").pack(
             anchor="w", pady=(6, 0)
         )
+
+    def sync_remember(self) -> None:
+        """Refleja en el check el estado actual (p. ej. tras guardar desde el aviso superior)."""
+        user = self._state.current_user
+        self._remember_var.set(bool(user and user.remembered))
 
     def _toggle_remember(self) -> None:
         wanted = self._remember_var.get()
@@ -170,11 +178,14 @@ class SettingsTab(ttk.Frame):
         note = ""
         if all(info.name.startswith("Cámara ") for info in cameras):
             note = (
-                " Para ver los nombres reales de las cámaras instale: python -m pip install pygrabber"
+                " No se pudieron leer los nombres del Administrador de dispositivos; "
+                "instale pygrabber para verlos: python -m pip install pygrabber"
             )
+        usable_count = len(usable)
         self._camera_status_var.set(
-            f"Se encontraron {len(cameras)} cámara(s): "
+            f"Cámaras del sistema (como en el Administrador de dispositivos): "
             f"{', '.join(info.name for info in cameras)}. "
+            f"{usable_count} disponible(s) para usar. "
             f"La elegida dice «EN USO»; pulse «Guardar ajustes» para confirmar.{note}"
         )
 
@@ -256,12 +267,12 @@ class SettingsTab(ttk.Frame):
         if self._selected is None:
             self._show_saved("⚠ Elija una cámara. Si no hay ninguna, pulse Buscar cámaras.")
             return
-        threshold = next(level[1] for level in PRECISION_LEVELS if level[0] == self._precision_var.get())
+        level = next(item for item in PRECISION_LEVELS if item.name == self._precision_var.get())
         settings = replace(
             self._state.settings,
             camera_index=self._selected.index,
             camera_name=self._selected.name,
-            threshold=threshold,
+            threshold=level.threshold,
         )
         try:
             self._state.update_settings(settings)

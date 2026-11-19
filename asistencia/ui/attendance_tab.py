@@ -3,7 +3,7 @@ from __future__ import annotations
 import csv
 import tkinter as tk
 from dataclasses import dataclass, replace
-from datetime import date, datetime, timedelta
+from datetime import date, datetime
 from pathlib import Path
 from tkinter import messagebox, ttk
 
@@ -20,11 +20,11 @@ from ..config import (
     COLOR_WARNING,
     FONT_FAMILY,
     FRAME_DELAY_MS,
-    MANUAL_SESSION_MINUTES,
     MAX_READ_FAILURES,
     NOTICE_MS,
     PROCESS_EVERY_N_FRAMES,
     VIEW_WIDTH,
+    precision_for,
 )
 from ..errors import AttendanceError, CameraError
 from ..face_engine import Gallery
@@ -69,7 +69,8 @@ class AttendanceTab(ttk.Frame):
         self._camera: Camera | None = None
         self._column: int | None = None
         self._live_failed = False
-        self._session_end = datetime.now()
+        self._session_start = datetime.now()
+        self._session_end: datetime | None = None  # None = lista manual, sin hora de fin
         self._results: tuple[FaceResult, ...] = ()
         self._frame_count = 0
         self._read_failures = 0
@@ -81,6 +82,7 @@ class AttendanceTab(ttk.Frame):
         self._course_var = tk.StringVar()
         self._status_var = tk.StringVar()
         self._timer_var = tk.StringVar()
+        self._timer_caption_var = tk.StringVar()
         self._next_var = tk.StringVar()
         self._build()
         state.subscribe(self.refresh_courses)
@@ -127,6 +129,7 @@ class AttendanceTab(ttk.Frame):
         ttk.Label(info.body, textvariable=self._status_var, style="Status.TLabel", wraplength=380).pack(
             anchor="w"
         )
+        ttk.Label(info.body, textvariable=self._timer_caption_var, style="Hint.TLabel").pack(anchor="w")
         ttk.Label(info.body, textvariable=self._timer_var, style="Timer.TLabel").pack(anchor="w")
         ttk.Label(info.body, textvariable=self._next_var, style="Hint.TLabel", wraplength=380).pack(
             anchor="w", pady=(2, 0)
@@ -257,8 +260,9 @@ class AttendanceTab(ttk.Frame):
         if not course.students:
             self._show_notice(f"«{course.name}» no tiene estudiantes registrados.", "warning")
             return
-        end = datetime.now() + timedelta(minutes=MANUAL_SESSION_MINUTES)
-        self._begin(course, end, automatic=False)
+        # Manual: sin hora de fin. Corre desde ahora y la cámara sigue encendida
+        # hasta que se pulse «Finalizar y guardar».
+        self._begin(course, None, automatic=False)
 
     def _try_auto_start(self, now: datetime) -> None:
         for course, slot in due_courses(self._state.repository.courses, now):
@@ -292,7 +296,7 @@ class AttendanceTab(ttk.Frame):
         end = datetime.combine(now.date(), parse_time(slot.end))
         self._begin(course, end, automatic=True)
 
-    def _begin(self, course: Course, end: datetime, automatic: bool) -> None:
+    def _begin(self, course: Course, end: datetime | None, automatic: bool) -> None:
         try:
             camera = self._state.open_camera()
         except CameraError as error:
@@ -309,10 +313,22 @@ class AttendanceTab(ttk.Frame):
         self._column = column
         self._live_failed = False
         self._final = None
+        level = precision_for(self._state.settings.threshold)
         self._session = AttendanceSession(
-            self._state.engine, Gallery(course.students), self._state.settings.threshold
+            self._state.engine,
+            Gallery(course.students),
+            level.threshold,
+            level.margin,
+            level.confirm_frames,
         )
+        self._session_start = datetime.now()
         self._session_end = end
+        self._timer_caption_var.set(
+            "Tiempo transcurrido (termina al pulsar «Finalizar y guardar»)"
+            if end is None
+            else "Tiempo restante de la clase (termina sola)"
+        )
+        self._update_timer(self._session_start)
         self._results = ()
         self._frame_count = 0
         self._read_failures = 0
@@ -396,6 +412,7 @@ class AttendanceTab(ttk.Frame):
         self._state.session_active = False
         self._view.clear()
         self._timer_var.set("")
+        self._timer_caption_var.set("")
         self._course_combo.configure(state="readonly")
         self._start_button.configure(state="normal")
         self._stop_button.configure(state="disabled")
@@ -459,9 +476,19 @@ class AttendanceTab(ttk.Frame):
         if self._session is None:
             self._try_auto_start(now)
             return
-        remaining = int((self._session_end - now).total_seconds())
-        if remaining <= 0:
+        if self._session_end is not None and now >= self._session_end:
             self.finish_session()
             return
-        minutes, seconds = divmod(remaining, 60)
-        self._timer_var.set(f"{minutes:02d}:{seconds:02d}")
+        self._update_timer(now)
+
+    def _update_timer(self, now: datetime) -> None:
+        """Manual: cronómetro desde que se pulsó «Iniciar». Automática: cuenta regresiva."""
+        if self._session_end is None:
+            seconds_total = max(0, int((now - self._session_start).total_seconds()))
+        else:
+            seconds_total = max(0, int((self._session_end - now).total_seconds()))
+        hours, rest = divmod(seconds_total, 3600)
+        minutes, seconds = divmod(rest, 60)
+        self._timer_var.set(
+            f"{hours:d}:{minutes:02d}:{seconds:02d}" if hours else f"{minutes:02d}:{seconds:02d}"
+        )

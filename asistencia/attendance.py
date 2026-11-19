@@ -25,10 +25,19 @@ FIRST_DATE_COLUMN = 4
 
 
 class AttendanceSession:
-    def __init__(self, engine: FaceEngine, gallery: Gallery, threshold: float) -> None:
+    def __init__(
+        self,
+        engine: FaceEngine,
+        gallery: Gallery,
+        threshold: float,
+        margin: float = 0.0,
+        confirm_frames: int = CONFIRM_FRAMES,
+    ) -> None:
         self._engine = engine
         self._gallery = gallery
         self._threshold = threshold
+        self._margin = margin
+        self._confirm_frames = confirm_frames
         self._streaks: dict[str, int] = {}
         self._present: dict[str, datetime] = {}
         self._events: list[tuple[str, str]] = []
@@ -48,7 +57,7 @@ class AttendanceSession:
         for face in self._engine.detect(frame):
             x, y, w, h = (int(value) for value in face[:4])
             student = self._gallery.identify(
-                self._engine.embed(frame, face), self._threshold
+                self._engine.embed(frame, face), self._threshold, self._margin
             )
             if student is None:
                 results.append(FaceResult((x, y, w, h), "Desconocido", False))
@@ -59,7 +68,7 @@ class AttendanceSession:
         confirmed: dict[str, datetime] = {}
         new_events: list[tuple[str, str]] = []
         for student_id, count in self._streaks.items():
-            if count != CONFIRM_FRAMES:
+            if count != self._confirm_frames:
                 continue
             if student_id in self._present:
                 new_events.append(("already", student_id))

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import subprocess
 import sys
 from dataclasses import dataclass
 from functools import lru_cache
@@ -61,15 +62,49 @@ class Camera:
         self._capture.release()
 
 
-def device_names() -> list[str]:
+POWERSHELL_TIMEOUT_SECONDS = 15
+# Mismo listado que muestra el Administrador de dispositivos → «Cámaras».
+CAMERA_NAMES_SCRIPT = (
+    "[Console]::OutputEncoding=[System.Text.Encoding]::UTF8;"
+    "Get-PnpDevice -Class Camera -PresentOnly -ErrorAction SilentlyContinue | "
+    "Select-Object -ExpandProperty FriendlyName"
+)
+
+
+def _directshow_names() -> list[str]:
+    """Nombres en el MISMO orden que los índices de OpenCV (requiere pygrabber)."""
     try:
         from pygrabber.dshow_graph import FilterGraph
     except ImportError:
         return []
     try:
         return [str(name) for name in FilterGraph().get_input_devices()]
-    except Exception:
+    except Exception:  # pygrabber falla con errores COM variados; se usa el plan B
         return []
+
+
+def _device_manager_names() -> list[str]:
+    """Cámaras tal como aparecen en el Administrador de dispositivos (solo Windows)."""
+    if not sys.platform.startswith("win"):
+        return []
+    try:
+        completed = subprocess.run(
+            ["powershell", "-NoProfile", "-NonInteractive", "-Command", CAMERA_NAMES_SCRIPT],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            timeout=POWERSHELL_TIMEOUT_SECONDS,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+            check=False,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return []  # sin PowerShell: se mostrarán como «Cámara 0», «Cámara 1»…
+    return [line.strip() for line in completed.stdout.splitlines() if line.strip()]
+
+
+def device_names() -> list[str]:
+    """Nombres reales de las cámaras: pygrabber si está, si no el Administrador de dispositivos."""
+    return _directshow_names() or _device_manager_names()
 
 
 def names_available() -> bool:
@@ -79,7 +114,7 @@ def names_available() -> bool:
 def resolve_camera_index(name: str, fallback: int) -> int:
     if not name:
         return fallback
-    names = device_names()
+    names = _directshow_names()  # rápido; PowerShell tardaría al iniciar cada lista
     if not names:
         return fallback
     if name not in names:
@@ -106,8 +141,9 @@ def _delivers_frames(index: int) -> bool:
 
 
 def detect_cameras() -> tuple[CameraInfo, ...]:
-    """Lista las cámaras por nombre. Con nombres reales (pygrabber) también
-    muestra las que no se pudieron abrir, marcadas como no disponibles."""
+    """Lista las cámaras por su nombre real (como en el Administrador de dispositivos).
+    Con nombres reales también muestra las que no se pudieron abrir, marcadas como
+    no disponibles (por ejemplo, en uso por otra aplicación)."""
     names = device_names()
     candidates = len(names) if names else MAX_CAMERA_INDEX
     found: list[CameraInfo] = []

@@ -97,16 +97,28 @@ class Gallery:
         self._matrix = np.vstack(rows) if rows else np.empty((0, 128), np.float32)
         self._owners = np.asarray(owners, dtype=int)
 
-    def identify(self, feature: np.ndarray, threshold: float) -> Student | None:
+    def identify(
+        self, feature: np.ndarray, threshold: float, margin: float = 0.0
+    ) -> Student | None:
+        """Estudiante dueño del rostro, o None si no alcanza el umbral o es ambiguo.
+
+        Se compara por ESTUDIANTE (su mejor muestra). Si el segundo estudiante más parecido
+        queda a menos de `margin`, el rostro es ambiguo y no se asigna a nadie.
+        """
         if self._matrix.shape[0] == 0:
             return None
         vector = feature.flatten().astype(np.float32)
         vector = vector / np.linalg.norm(vector)
         similarities = self._matrix @ vector
-        best = int(np.argmax(similarities))
-        if similarities[best] < threshold:
+        per_student = np.full(len(self._students), -1.0, dtype=np.float32)
+        np.maximum.at(per_student, self._owners, similarities)
+        ranking = np.argsort(per_student)[::-1]
+        best = int(ranking[0])
+        if per_student[best] < threshold:
             return None
-        return self._students[int(self._owners[best])]
+        if len(ranking) > 1 and per_student[best] - per_student[int(ranking[1])] < margin:
+            return None
+        return self._students[best]
 
     def best_match(
         self, samples: Sequence[Sequence[float]], threshold: float

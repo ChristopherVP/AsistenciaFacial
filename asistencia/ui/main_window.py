@@ -17,6 +17,7 @@ from ..config import (
 )
 from .attendance_tab import AttendanceTab
 from .courses_tab import CoursesTab
+from .save_prompt import SavePrompt
 from .scrollable import ScrollableFrame
 from .settings_tab import SettingsTab
 from .state import AppState
@@ -34,6 +35,7 @@ class MainWindow:
         self.logout_requested = False
         self._tick_job: str | None = None
         self._camera_job: str | None = None
+        self._prompt_job: str | None = None
         self._root = root
         self._state = state
         self._icon = icon
@@ -53,6 +55,7 @@ class MainWindow:
             messagebox.showwarning(APP_TITLE, warning, parent=root)
         self._tick()
         self._camera_job = root.after(400, self._settings.refresh_cameras)
+        self._prompt_job = root.after(700, self._offer_remember)
 
     def _build_header(self) -> None:
         header = tk.Frame(self._root, bg=COLOR_PRIMARY, height=70)
@@ -111,6 +114,15 @@ class MainWindow:
         self._clock_var.set(f"{DAY_LABELS[now.weekday()]} {now:%d/%m/%Y   %H:%M:%S}")
         self._attendance.on_tick(now)
 
+    def _offer_remember(self) -> None:
+        user = self._state.current_user
+        if user is not None and not user.remembered:
+            SavePrompt(self._root, self._remember_user)
+
+    def _remember_user(self) -> None:
+        self._state.set_remember_current_user(True)
+        self._settings.sync_remember()
+
     def _confirm_end_session(self, action: str) -> bool:
         if not self._attendance.is_running:
             return True
@@ -131,7 +143,7 @@ class MainWindow:
             self._root.quit()
 
     def close(self) -> None:
-        for job in (self._tick_job, self._camera_job):
+        for job in (self._tick_job, self._camera_job, self._prompt_job):
             if job is not None:
                 self._root.after_cancel(job)
         for child in self._root.winfo_children():

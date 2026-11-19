@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import tkinter as tk
-from tkinter import messagebox, ttk
+from tkinter import ttk
 from typing import Callable
 
 from PIL import ImageTk
@@ -135,10 +135,7 @@ class LoginWindow:
         self._user_check = (self._window.register(allows_username_input), "%P")
         self._build_layout()
         maximize(self._window)
-        if users.has_users:
-            self._show_login()
-        else:
-            self._show_register(first_user=True)
+        self._show_login()  # el acceso SIEMPRE es lo primero; crear cuenta es un enlace
 
     def run(self) -> User | None:
         self._window.lift()
@@ -244,7 +241,10 @@ class LoginWindow:
     # ---------- vista: iniciar sesión ----------
 
     def _show_login(self, username: str = "", notice: str = "") -> None:
-        body = self._reset_view("Iniciar sesión", notice or "Ingresa con tu usuario y contraseña.")
+        hint = "Ingresa con tu usuario y contraseña."
+        if not self._users.has_users:
+            hint = "Aún no hay cuentas. Pulsa «Regístrate aquí» para crear la tuya."
+        body = self._reset_view("Iniciar sesión", notice or hint)
         saved = self._users.remembered_users()[:MAX_SAVED_CARDS]
         if saved:
             ttk.Label(
@@ -296,6 +296,9 @@ class LoginWindow:
             self._show_login(notice=str(error))
 
     def _login(self, username: str, password: str) -> None:
+        if not self._users.has_users:
+            self._error_var.set("Todavía no existe ninguna cuenta. Pulsa «Regístrate aquí» para crear una.")
+            return
         if not username.strip() or not password:
             self._error_var.set("Escribe tu usuario y tu contraseña.")
             return
@@ -304,24 +307,7 @@ class LoginWindow:
         except AppError as error:
             self._fail(error)
             return
-        self._finish(self._offer_to_remember(user))
-
-    def _offer_to_remember(self, user: User) -> User:
-        if user.remembered:
-            return user
-        wants_it = messagebox.askyesno(
-            "¿Guardar usuario?",
-            "¿Desea guardar este usuario para entrar con un solo clic la próxima vez?\n\n"
-            "Podrá desactivarlo cuando quiera en Ajustes → Mi cuenta.",
-            parent=self._window,
-        )
-        if not wants_it:
-            return user
-        try:
-            return self._users.set_remembered(user.cedula, True)
-        except AppError as error:
-            messagebox.showwarning(APP_TITLE, f"No se pudo guardar el usuario: {error}", parent=self._window)
-            return user
+        self._finish(user)  # «¿Guardar usuario?» se ofrece ya dentro, sin bloquear
 
     # ---------- vista: crear cuenta ----------
 
@@ -336,8 +322,12 @@ class LoginWindow:
             return f"✖  «{name}» ya está en uso", COLOR_DANGER
         return f"✔  «{name}» está disponible", COLOR_SUCCESS
 
-    def _show_register(self, first_user: bool = False) -> None:
-        hint = "Crea el primer usuario del sistema." if first_user else "Cada cédula y cada usuario son únicos."
+    def _show_register(self) -> None:
+        hint = (
+            "Crea tu cuenta para poder ingresar."
+            if not self._users.has_users
+            else "Cada cédula y cada usuario son únicos."
+        )
         body = self._reset_view("Crear cuenta", hint)
         cedula_var, name_var, user_var = tk.StringVar(), tk.StringVar(), tk.StringVar()
         password_var, confirm_var = tk.StringVar(), tk.StringVar()
@@ -382,8 +372,7 @@ class LoginWindow:
 
         self._submit = submit
         self._button(body, "Crear cuenta", "Success.TButton", submit)
-        if self._users.has_users:
-            self._link(body, "← Volver a iniciar sesión", self._show_login).pack(anchor="w", pady=(14, 0))
+        self._link(body, "← Volver a iniciar sesión", self._show_login).pack(anchor="w", pady=(14, 0))
         cedula_entry.focus_set()
 
     # ---------- vista: recuperar contraseña ----------
