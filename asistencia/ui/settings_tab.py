@@ -100,7 +100,9 @@ class SettingsTab(ttk.Frame):
         user = self._state.current_user
         if user is not None:
             ttk.Label(
-                card.body, text=f"{user.full_name}   ·   Cédula {user.cedula}", style="Card.TLabel"
+                card.body,
+                text=f"{user.full_name}   ·   @{user.username}   ·   Cédula {user.cedula}",
+                style="Card.TLabel",
             ).pack(anchor="w", pady=(6, 8))
         ttk.Checkbutton(
             card.body,

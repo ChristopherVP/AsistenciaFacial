@@ -57,6 +57,8 @@ PRECISION_LEVELS = (
     ("Estricto", 0.50, "Evita confundir a una persona con otra. Úselo si hay falsos registros."),
 )
 
+MIN_USERNAME_LENGTH = 4
+MAX_USERNAME_LENGTH = 20
 MIN_PASSWORD_LENGTH = 8
 MAX_PASSWORD_LENGTH = 64
 MIN_ANSWER_LENGTH = 3

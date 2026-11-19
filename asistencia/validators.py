@@ -5,9 +5,11 @@ import unicodedata
 
 from .config import (
     MAX_PASSWORD_LENGTH,
+    MAX_USERNAME_LENGTH,
     MAX_PROVINCE_CODE,
     MIN_ANSWER_LENGTH,
     MIN_PASSWORD_LENGTH,
+    MIN_USERNAME_LENGTH,
     NAME_MAX_LENGTH,
 )
 from .errors import ValidationError
@@ -17,6 +19,10 @@ NAME_PATTERN = re.compile(rf"^[{LETTERS}]+( [{LETTERS}]+)*$")
 CEDULA_INPUT_PATTERN = re.compile(r"^[0-9]{0,10}$")
 NAME_INPUT_PATTERN = re.compile(rf"^[{LETTERS} ]{{0,{NAME_MAX_LENGTH}}}$")
 DIGITS_ONLY = re.compile(r"^[0-9]+$")
+USERNAME_INPUT_PATTERN = re.compile(rf"^[A-Za-z0-9._]{{0,{MAX_USERNAME_LENGTH}}}$")
+USERNAME_PATTERN = re.compile(
+    rf"^[a-z][a-z0-9._]{{{MIN_USERNAME_LENGTH - 1},{MAX_USERNAME_LENGTH - 1}}}$"
+)
 
 
 def allows_cedula_input(text: str) -> bool:
@@ -25,6 +31,22 @@ def allows_cedula_input(text: str) -> bool:
 
 def allows_name_input(text: str) -> bool:
     return NAME_INPUT_PATTERN.match(text) is not None
+
+
+def allows_username_input(text: str) -> bool:
+    return USERNAME_INPUT_PATTERN.match(text) is not None
+
+
+def normalize_username(text: str) -> str:
+    value = text.strip().lower()
+    if not value:
+        raise ValidationError("Escribe el nombre de usuario.")
+    if USERNAME_PATTERN.match(value) is None:
+        raise ValidationError(
+            f"Usuario de {MIN_USERNAME_LENGTH} a {MAX_USERNAME_LENGTH} caracteres: "
+            "empieza con letra; solo letras, números, punto o guion bajo."
+        )
+    return value
 
 
 def validate_cedula(text: str) -> str:

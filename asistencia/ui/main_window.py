@@ -20,6 +20,7 @@ from .courses_tab import CoursesTab
 from .scrollable import ScrollableFrame
 from .settings_tab import SettingsTab
 from .state import AppState
+from .window_utils import maximize
 
 
 class MainWindow:
@@ -39,10 +40,8 @@ class MainWindow:
         self._header_logo = ImageTk.PhotoImage(make_logo(46))
         self._clock_var = tk.StringVar()
         root.title(APP_TITLE)
-        width = min(1280, root.winfo_screenwidth() - 60)
-        height = min(800, root.winfo_screenheight() - 110)
-        root.geometry(f"{width}x{height}+30+20")
         root.minsize(1100, 520)
+        maximize(root)
         self._build_header()
         self._notebook = ttk.Notebook(root)
         self._notebook.pack(fill="both", expand=True, padx=8, pady=(8, 8))

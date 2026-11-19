@@ -10,25 +10,111 @@ from ..auth import User, UserRepository
 from ..branding import make_logo
 from ..config import (
     APP_TITLE,
-    COLOR_BG,
+    COLOR_ACCENT,
     COLOR_BORDER,
+    COLOR_CARD,
+    COLOR_DANGER,
     COLOR_MUTED,
-    COLOR_PRIMARY,
     COLOR_SELECT,
+    COLOR_SUCCESS,
     COLOR_TEXT,
     FONT_FAMILY,
     SECURITY_QUESTIONS,
 )
 from ..errors import AppError
-from ..validators import allows_cedula_input, allows_name_input
-from .widgets import Card
+from ..validators import allows_cedula_input, allows_name_input, allows_username_input, normalize_username
+from .window_utils import maximize
 
-WINDOW_WIDTH = 470
 PASSWORD_MASK = "•"
+FORM_WIDTH = 440
+MAX_SAVED_CARDS = 4
+GRADIENT_TOP = (11, 37, 64)
+GRADIENT_BOTTOM = (27, 108, 168)
+SAVED_BG = "#EAF2FB"
+FEATURES = (
+    "📷  Registro rápido con tu rostro",
+    "✔  Listas de asistencia en Excel",
+    "🔒  Acceso protegido con tu cuenta",
+)
+
+
+def _blend(start: tuple[int, int, int], end: tuple[int, int, int], ratio: float) -> str:
+    red, green, blue = (round(a + (b - a) * ratio) for a, b in zip(start, end))
+    return f"#{red:02x}{green:02x}{blue:02x}"
+
+
+class BrandPanel(tk.Canvas):
+    """Panel izquierdo: degradado azul con un visor de cámara y reconocimiento facial."""
+
+    def __init__(self, parent: tk.Misc) -> None:
+        super().__init__(parent, highlightthickness=0, bg=_blend(GRADIENT_TOP, GRADIENT_BOTTOM, 0))
+        self.bind("<Configure>", lambda _event: self._draw())
+
+    def _draw(self) -> None:
+        self.delete("all")
+        width, height = self.winfo_width(), self.winfo_height()
+        if width < 50 or height < 50:
+            return
+        self._gradient(width, height)
+        radius = min(width * 0.26, height * 0.17)
+        center_x, center_y = width / 2, height * 0.33
+        self._lens(center_x, center_y, radius)
+        self._viewfinder(center_x, center_y, radius)
+        self._texts(width, center_y + radius * 1.75 - 20)
+
+    def _gradient(self, width: int, height: int) -> None:
+        step = 3
+        for top in range(0, height, step):
+            color = _blend(GRADIENT_TOP, GRADIENT_BOTTOM, top / height)
+            self.create_rectangle(0, top, width, top + step, fill=color, outline=color)
+
+    def _circle(self, x: float, y: float, radius: float, **options: object) -> None:
+        self.create_oval(x - radius, y - radius, x + radius, y + radius, **options)
+
+    def _lens(self, x: float, y: float, radius: float) -> None:
+        self._circle(x, y, radius * 1.75, outline="#2A6AA0", width=1)
+        self._circle(x, y, radius * 1.45, outline="#3A7DB5", width=1)
+        self._circle(x, y, radius * 1.1, fill="#0E2C4A", outline="#4A90C8", width=3)
+        self._circle(x, y, radius * 0.82, fill="#1F4E79", outline="#2E86C1", width=2)
+        self._circle(x, y, radius * 0.55, fill="#2E86C1")
+        self._circle(x, y, radius * 0.34, fill="#0B2038")
+        self._circle(x - radius * 0.14, y - radius * 0.14, radius * 0.09, fill="#CFE8FA", outline="")
+
+    def _viewfinder(self, x: float, y: float, radius: float) -> None:
+        half, arm = radius * 1.35, radius * 0.38
+        for sign_x in (-1, 1):
+            for sign_y in (-1, 1):
+                corner_x, corner_y = x + sign_x * half, y + sign_y * half
+                self.create_line(
+                    corner_x - sign_x * arm, corner_y, corner_x, corner_y, corner_x, corner_y - sign_y * arm,
+                    fill="#7FD1F0", width=4, joinstyle="round", capstyle="round",
+                )
+        self.create_line(x - half, y, x + half, y, fill="#5BC0EB", dash=(6, 6))
+        badge_x, badge_y, badge = x + half, y + half, radius * 0.3
+        self._circle(badge_x, badge_y, badge, fill=COLOR_SUCCESS, outline="white", width=3)
+        self.create_line(
+            badge_x - badge * 0.45, badge_y, badge_x - badge * 0.1, badge_y + badge * 0.4,
+            badge_x + badge * 0.5, badge_y - badge * 0.35,
+            fill="white", width=4, capstyle="round", joinstyle="round",
+        )
+
+    def _texts(self, width: int, top: float) -> None:
+        middle = width / 2
+        self.create_text(
+            middle, top + 55, text=APP_TITLE, fill="white", font=(FONT_FAMILY, 28, "bold")
+        )
+        self.create_text(
+            middle, top + 95, text="Control de asistencia con reconocimiento facial",
+            fill="#BFE0F5", font=(FONT_FAMILY, 12),
+        )
+        for index, feature in enumerate(FEATURES):
+            self.create_text(
+                middle, top + 160 + index * 34, text=feature, fill="#E3F2FC", font=(FONT_FAMILY, 12)
+            )
 
 
 class LoginWindow:
-    """Ventana modal de acceso. `run()` devuelve el usuario autenticado o None."""
+    """Ventana de acceso a pantalla completa. `run()` devuelve el usuario o None."""
 
     def __init__(self, root: tk.Tk, users: UserRepository, icon: ImageTk.PhotoImage) -> None:
         self._users = users
@@ -37,111 +123,116 @@ class LoginWindow:
         self._password_entries: list[ttk.Entry] = []
         self._window = tk.Toplevel(root)
         self._window.title(f"{APP_TITLE} — Acceso")
-        self._window.configure(bg=COLOR_BG)
-        self._window.resizable(False, False)
+        self._window.configure(bg=COLOR_CARD)
+        self._window.minsize(960, 700)
         self._window.iconphoto(True, icon)
         self._window.protocol("WM_DELETE_WINDOW", self._window.destroy)
         self._window.bind("<Return>", lambda _event: self._submit())
-        self._logo = ImageTk.PhotoImage(make_logo(54))
         self._show_password = tk.BooleanVar(value=False)
         self._error_var = tk.StringVar()
         self._cedula_check = (self._window.register(allows_cedula_input), "%P")
         self._name_check = (self._window.register(allows_name_input), "%P")
-        self._build_header()
-        self._content = tk.Frame(self._window, bg=COLOR_BG)
-        self._content.pack(fill="both", expand=True, padx=18, pady=(14, 18))
+        self._user_check = (self._window.register(allows_username_input), "%P")
+        self._build_layout()
+        maximize(self._window)
         if users.has_users:
             self._show_login()
         else:
             self._show_register(first_user=True)
 
     def run(self) -> User | None:
-        self._center()
         self._window.lift()
         self._window.focus_force()
         self._window.wait_window()
         return self._result
 
-    def _center(self) -> None:
-        self._window.update_idletasks()
-        width = max(WINDOW_WIDTH, self._window.winfo_reqwidth())
-        height = self._window.winfo_reqheight()
-        x = (self._window.winfo_screenwidth() - width) // 2
-        y = max(10, (self._window.winfo_screenheight() - height) // 3)
-        self._window.geometry(f"{width}x{height}+{x}+{y}")
-
-    def _build_header(self) -> None:
-        header = tk.Frame(self._window, bg=COLOR_PRIMARY)
-        header.pack(fill="x")
-        tk.Label(header, image=self._logo, bg=COLOR_PRIMARY).pack(side="left", padx=(18, 10), pady=12)
-        tk.Label(
-            header, text=APP_TITLE, bg=COLOR_PRIMARY, fg="white", font=(FONT_FAMILY, 17, "bold")
-        ).pack(side="left")
+    def _build_layout(self) -> None:
+        self._window.grid_rowconfigure(0, weight=1)
+        self._window.grid_columnconfigure(0, weight=44, uniform="columns")
+        self._window.grid_columnconfigure(1, weight=56, uniform="columns")
+        BrandPanel(self._window).grid(row=0, column=0, sticky="nsew")
+        right = tk.Frame(self._window, bg=COLOR_CARD)
+        right.grid(row=0, column=1, sticky="nsew")
+        right.grid_rowconfigure(0, weight=1)
+        right.grid_columnconfigure(0, weight=1)
+        self._content = tk.Frame(right, bg=COLOR_CARD)
+        self._content.grid(row=0, column=0)
 
     # ---------- piezas reutilizables ----------
 
-    def _reset_view(self, title: str, hint: str) -> ttk.Frame:
+    def _reset_view(self, title: str, hint: str) -> tk.Frame:
         for child in self._content.winfo_children():
             child.destroy()
         self._password_entries = []
         self._error_var.set("")
-        card = Card(self._content, padding=20)
-        card.pack(fill="x")
-        ttk.Label(card.body, text=title, style="Title.TLabel").pack(anchor="w")
-        ttk.Label(card.body, text=hint, style="Hint.TLabel", wraplength=400).pack(
-            anchor="w", pady=(2, 10)
-        )
-        return card.body
+        tk.Frame(self._content, width=FORM_WIDTH, height=1, bg=COLOR_CARD).pack()
+        ttk.Label(
+            self._content, text=title, style="Card.TLabel", font=(FONT_FAMILY, 26, "bold")
+        ).pack(anchor="w")
+        ttk.Label(
+            self._content, text=hint, style="Hint.TLabel", wraplength=FORM_WIDTH, font=(FONT_FAMILY, 11)
+        ).pack(anchor="w", pady=(2, 14))
+        return self._content
 
-    def _label(self, parent: ttk.Frame, text: str) -> None:
-        ttk.Label(parent, text=text, style="Card.TLabel", font=(FONT_FAMILY, 10, "bold")).pack(
-            anchor="w", pady=(8, 2)
+    def _field(
+        self,
+        parent: tk.Misc,
+        caption: str,
+        variable: tk.StringVar,
+        check: tuple[str, str] | None = None,
+        secret: bool = False,
+    ) -> ttk.Entry:
+        ttk.Label(parent, text=caption, style="Card.TLabel", font=(FONT_FAMILY, 10, "bold")).pack(
+            anchor="w", pady=(10, 3)
         )
-
-    def _cedula_field(self, parent: ttk.Frame, variable: tk.StringVar, enabled: bool = True) -> ttk.Entry:
-        self._label(parent, "Cédula")
-        entry = ttk.Entry(
-            parent,
-            textvariable=variable,
-            validate="key",
-            validatecommand=self._cedula_check,
-            state="normal" if enabled else "readonly",
-        )
+        options: dict[str, object] = {"textvariable": variable, "font": (FONT_FAMILY, 11)}
+        if check is not None:
+            options.update(validate="key", validatecommand=check)
+        if secret:
+            options["show"] = "" if self._show_password.get() else PASSWORD_MASK
+        entry = ttk.Entry(parent, **options)
         entry.pack(fill="x")
+        if secret:
+            self._password_entries.append(entry)
         return entry
 
-    def _password_field(self, parent: ttk.Frame, variable: tk.StringVar, caption: str) -> ttk.Entry:
-        self._label(parent, caption)
-        entry = ttk.Entry(
-            parent, textvariable=variable, show="" if self._show_password.get() else PASSWORD_MASK
-        )
-        entry.pack(fill="x")
-        self._password_entries.append(entry)
-        return entry
+    def _pair(self, parent: tk.Misc) -> tuple[tk.Frame, tk.Frame]:
+        row = tk.Frame(parent, bg=COLOR_CARD)
+        row.pack(fill="x")
+        left, right = tk.Frame(row, bg=COLOR_CARD), tk.Frame(row, bg=COLOR_CARD)
+        left.pack(side="left", fill="x", expand=True, padx=(0, 8))
+        right.pack(side="left", fill="x", expand=True, padx=(8, 0))
+        return left, right
 
-    def _show_password_toggle(self, parent: ttk.Frame) -> None:
+    def _show_password_toggle(self, parent: tk.Misc) -> None:
         ttk.Checkbutton(
             parent,
             text="👁  Mostrar contraseña",
             variable=self._show_password,
             command=self._apply_password_visibility,
             style="Card.TCheckbutton",
-        ).pack(anchor="w", pady=(8, 0))
+        ).pack(anchor="w", pady=(10, 0))
 
     def _apply_password_visibility(self) -> None:
         mask = "" if self._show_password.get() else PASSWORD_MASK
         for entry in self._password_entries:
             entry.configure(show=mask)
 
-    def _error_label(self, parent: ttk.Frame) -> None:
+    def _error_label(self, parent: tk.Misc) -> None:
         ttk.Label(
-            parent, textvariable=self._error_var, style="Error.TLabel", wraplength=400, justify="left"
-        ).pack(anchor="w", pady=(8, 0))
+            parent, textvariable=self._error_var, style="Error.TLabel", wraplength=FORM_WIDTH, justify="left"
+        ).pack(anchor="w", pady=(10, 0))
 
-    def _button(self, parent: ttk.Frame, text: str, style: str, command: Callable[[], None]) -> ttk.Button:
-        button = ttk.Button(parent, text=text, style=style, command=command)
-        button.pack(fill="x", pady=(6, 0))
-        return button
+    def _button(self, parent: tk.Misc, text: str, style: str, command: Callable[[], None]) -> None:
+        ttk.Button(parent, text=text, style=style, command=command).pack(fill="x", pady=(14, 0), ipady=4)
+
+    def _link(self, parent: tk.Misc, text: str, command: Callable[[], None]) -> tk.Label:
+        link = tk.Label(
+            parent, text=text, bg=COLOR_CARD, fg=COLOR_ACCENT, cursor="hand2",
+            font=(FONT_FAMILY, 10, "underline"),
+        )
+        link.bind("<Button-1>", lambda _event: command())
+        return link
 
     def _fail(self, error: Exception) -> None:
         self._error_var.set(str(error))
@@ -152,47 +243,43 @@ class LoginWindow:
 
     # ---------- vista: iniciar sesión ----------
 
-    def _show_login(self, cedula: str = "", notice: str = "") -> None:
-        body = self._reset_view("Iniciar sesión", notice or "Ingrese con su cédula y contraseña.")
-        saved = self._users.remembered_users()
+    def _show_login(self, username: str = "", notice: str = "") -> None:
+        body = self._reset_view("Iniciar sesión", notice or "Ingresa con tu usuario y contraseña.")
+        saved = self._users.remembered_users()[:MAX_SAVED_CARDS]
         if saved:
-            ttk.Label(body, text="Entrar con un clic", style="CardTitle.TLabel").pack(anchor="w")
+            ttk.Label(
+                body, text="Entrar con un clic", style="Card.TLabel", font=(FONT_FAMILY, 10, "bold")
+            ).pack(anchor="w")
             for user in saved:
                 self._saved_user_card(body, user)
-            ttk.Separator(body).pack(fill="x", pady=(12, 4))
-        cedula_var = tk.StringVar(value=cedula)
-        password_var = tk.StringVar()
-        cedula_entry = self._cedula_field(body, cedula_var)
-        password_entry = self._password_field(body, password_var, "Contraseña")
+            ttk.Separator(body).pack(fill="x", pady=(14, 2))
+        user_var, password_var = tk.StringVar(value=username), tk.StringVar()
+        user_entry = self._field(body, "Usuario", user_var, self._user_check)
+        password_entry = self._field(body, "Contraseña", password_var, secret=True)
         self._show_password_toggle(body)
         self._error_label(body)
-        self._submit = lambda: self._login(cedula_var.get(), password_var.get())
+        self._submit = lambda: self._login(user_var.get(), password_var.get())
         self._button(body, "Ingresar", "Primary.TButton", self._submit)
-        links = ttk.Frame(body, style="Card.TFrame")
-        links.pack(fill="x", pady=(6, 0))
-        ttk.Button(links, text="Crear cuenta", style="Ghost.TButton", command=self._show_register).pack(
-            side="left", expand=True, fill="x", padx=(0, 4)
+        self._link(
+            body, "¿Olvidaste tu contraseña?", lambda: self._show_recover(user_var.get())
+        ).pack(anchor="w", pady=(16, 0))
+        self._link(body, "¿No tienes cuenta? Regístrate aquí", self._show_register).pack(
+            anchor="w", pady=(6, 0)
         )
-        ttk.Button(
-            links,
-            text="¿Olvidó su contraseña?",
-            style="Ghost.TButton",
-            command=lambda: self._show_recover(cedula_var.get()),
-        ).pack(side="left", expand=True, fill="x", padx=(4, 0))
-        (password_entry if cedula else cedula_entry).focus_set()
+        (password_entry if username else user_entry).focus_set()
 
-    def _saved_user_card(self, parent: ttk.Frame, user: User) -> None:
+    def _saved_user_card(self, parent: tk.Misc, user: User) -> None:
         card = tk.Frame(
-            parent, bg="#EAF2FB", highlightthickness=1, highlightbackground=COLOR_BORDER, cursor="hand2"
+            parent, bg=SAVED_BG, highlightthickness=1, highlightbackground=COLOR_BORDER, cursor="hand2"
         )
         card.pack(fill="x", pady=(6, 0))
         name = tk.Label(
-            card, text=f"👤  {user.full_name}", bg="#EAF2FB", fg=COLOR_TEXT,
+            card, text=f"👤  {user.full_name}", bg=SAVED_BG, fg=COLOR_TEXT,
             font=(FONT_FAMILY, 11, "bold"), anchor="w", cursor="hand2",
         )
         name.pack(fill="x", padx=12, pady=(8, 0))
         detail = tk.Label(
-            card, text=f"Cédula {user.cedula}  ·  clic para entrar", bg="#EAF2FB", fg=COLOR_MUTED,
+            card, text=f"@{user.username}  ·  clic para entrar", bg=SAVED_BG, fg=COLOR_MUTED,
             font=(FONT_FAMILY, 9), anchor="w", cursor="hand2",
         )
         detail.pack(fill="x", padx=12, pady=(0, 8))
@@ -200,7 +287,7 @@ class LoginWindow:
         for widget in widgets:
             widget.bind("<Button-1>", lambda _event, item=user: self._enter_saved(item))
             widget.bind("<Enter>", lambda _event: [w.configure(bg=COLOR_SELECT) for w in widgets])
-            widget.bind("<Leave>", lambda _event: [w.configure(bg="#EAF2FB") for w in widgets])
+            widget.bind("<Leave>", lambda _event: [w.configure(bg=SAVED_BG) for w in widgets])
 
     def _enter_saved(self, user: User) -> None:
         try:
@@ -208,12 +295,12 @@ class LoginWindow:
         except AppError as error:
             self._show_login(notice=str(error))
 
-    def _login(self, cedula: str, password: str) -> None:
-        if not cedula.strip() or not password:
-            self._error_var.set("Escriba su cédula y su contraseña.")
+    def _login(self, username: str, password: str) -> None:
+        if not username.strip() or not password:
+            self._error_var.set("Escribe tu usuario y tu contraseña.")
             return
         try:
-            user = self._users.authenticate(cedula.strip(), password)
+            user = self._users.authenticate(username, password)
         except AppError as error:
             self._fail(error)
             return
@@ -238,94 +325,110 @@ class LoginWindow:
 
     # ---------- vista: crear cuenta ----------
 
+    def _username_status(self, text: str) -> tuple[str, str]:
+        if not text:
+            return "", COLOR_MUTED
+        try:
+            name = normalize_username(text)
+        except AppError as error:
+            return str(error), COLOR_MUTED
+        if self._users.username_taken(name):
+            return f"✖  «{name}» ya está en uso", COLOR_DANGER
+        return f"✔  «{name}» está disponible", COLOR_SUCCESS
+
     def _show_register(self, first_user: bool = False) -> None:
-        hint = (
-            "Cree el primer usuario del sistema."
-            if first_user
-            else "Se crea un solo usuario por cédula."
-        )
+        hint = "Crea el primer usuario del sistema." if first_user else "Cada cédula y cada usuario son únicos."
         body = self._reset_view("Crear cuenta", hint)
-        cedula_var, name_var = tk.StringVar(), tk.StringVar()
+        cedula_var, name_var, user_var = tk.StringVar(), tk.StringVar(), tk.StringVar()
         password_var, confirm_var = tk.StringVar(), tk.StringVar()
         question_var, answer_var = tk.StringVar(value=SECURITY_QUESTIONS[0]), tk.StringVar()
-        cedula_entry = self._cedula_field(body, cedula_var)
-        self._label(body, "Apellidos y nombres")
-        ttk.Entry(
-            body, textvariable=name_var, validate="key", validatecommand=self._name_check
-        ).pack(fill="x")
-        self._password_field(body, password_var, "Contraseña (mínimo 8 caracteres)")
-        self._password_field(body, confirm_var, "Repetir contraseña")
+        left, right = self._pair(body)
+        cedula_entry = self._field(left, "Cédula", cedula_var, self._cedula_check)
+        self._field(right, "Usuario", user_var, self._user_check)
+        status = tk.Label(body, bg=COLOR_CARD, fg=COLOR_MUTED, font=(FONT_FAMILY, 9), anchor="w", wraplength=FORM_WIDTH, justify="left")
+        status.pack(fill="x", pady=(4, 0))
+        user_var.trace_add(
+            "write",
+            lambda *_args: status.configure(
+                **dict(zip(("text", "fg"), self._username_status(user_var.get())))
+            ),
+        )
+        self._field(body, "Apellidos y nombres", name_var, self._name_check)
+        left, right = self._pair(body)
+        self._field(left, "Contraseña (mín. 8)", password_var, secret=True)
+        self._field(right, "Repetir contraseña", confirm_var, secret=True)
         self._show_password_toggle(body)
-        self._label(body, "Pregunta de seguridad (para recuperar la cuenta)")
+        ttk.Label(
+            body, text="Pregunta de seguridad (para recuperar la cuenta)", style="Card.TLabel",
+            font=(FONT_FAMILY, 10, "bold"),
+        ).pack(anchor="w", pady=(10, 3))
         ttk.Combobox(
-            body, textvariable=question_var, values=SECURITY_QUESTIONS, state="readonly"
+            body, textvariable=question_var, values=SECURITY_QUESTIONS, state="readonly",
+            font=(FONT_FAMILY, 11),
         ).pack(fill="x")
-        self._label(body, "Respuesta")
-        ttk.Entry(body, textvariable=answer_var).pack(fill="x")
+        self._field(body, "Respuesta", answer_var)
         self._error_label(body)
 
         def submit() -> None:
             try:
                 user = self._users.register(
-                    cedula_var.get(), name_var.get(), password_var.get(), confirm_var.get(),
-                    question_var.get(), answer_var.get(),
+                    cedula_var.get(), name_var.get(), user_var.get(), password_var.get(),
+                    confirm_var.get(), question_var.get(), answer_var.get(),
                 )
             except AppError as error:
                 self._fail(error)
                 return
-            self._show_login(user.cedula, "✔ Cuenta creada. Ahora inicie sesión.")
+            self._show_login(user.username, "✔ Cuenta creada. Ahora inicia sesión.")
 
         self._submit = submit
         self._button(body, "Crear cuenta", "Success.TButton", submit)
         if self._users.has_users:
-            self._button(body, "Volver", "Ghost.TButton", self._show_login)
+            self._link(body, "← Volver a iniciar sesión", self._show_login).pack(anchor="w", pady=(14, 0))
         cedula_entry.focus_set()
 
     # ---------- vista: recuperar contraseña ----------
 
-    def _show_recover(self, cedula: str = "") -> None:
+    def _show_recover(self, username: str = "") -> None:
         body = self._reset_view(
-            "Recuperar contraseña", "Escriba su cédula para ver su pregunta de seguridad."
+            "Recuperar contraseña", "Escribe tu usuario para ver tu pregunta de seguridad."
         )
-        cedula_var = tk.StringVar(value=cedula)
-        entry = self._cedula_field(body, cedula_var)
+        user_var = tk.StringVar(value=username)
+        entry = self._field(body, "Usuario", user_var, self._user_check)
         self._error_label(body)
 
         def search() -> None:
             try:
-                question = self._users.security_question(cedula_var.get().strip())
+                question = self._users.security_question(user_var.get())
             except AppError as error:
                 self._fail(error)
                 return
-            self._show_reset_form(cedula_var.get().strip(), question)
+            self._show_reset_form(user_var.get().strip().lower(), question)
 
         self._submit = search
         self._button(body, "Continuar", "Primary.TButton", search)
-        self._button(body, "Volver", "Ghost.TButton", self._show_login)
+        self._link(body, "← Volver a iniciar sesión", self._show_login).pack(anchor="w", pady=(14, 0))
         entry.focus_set()
 
-    def _show_reset_form(self, cedula: str, question: str) -> None:
-        body = self._reset_view("Nueva contraseña", f"Cédula {cedula}")
+    def _show_reset_form(self, username: str, question: str) -> None:
+        body = self._reset_view("Nueva contraseña", f"Usuario @{username}")
         answer_var, password_var, confirm_var = tk.StringVar(), tk.StringVar(), tk.StringVar()
-        self._label(body, question)
-        answer_entry = ttk.Entry(body, textvariable=answer_var)
-        answer_entry.pack(fill="x")
-        self._password_field(body, password_var, "Nueva contraseña (mínimo 8 caracteres)")
-        self._password_field(body, confirm_var, "Repetir nueva contraseña")
+        answer_entry = self._field(body, question, answer_var)
+        self._field(body, "Nueva contraseña (mínimo 8 caracteres)", password_var, secret=True)
+        self._field(body, "Repetir nueva contraseña", confirm_var, secret=True)
         self._show_password_toggle(body)
         self._error_label(body)
 
         def submit() -> None:
             try:
                 user = self._users.recover_password(
-                    cedula, answer_var.get(), password_var.get(), confirm_var.get()
+                    username, answer_var.get(), password_var.get(), confirm_var.get()
                 )
             except AppError as error:
                 self._fail(error)
                 return
-            self._show_login(user.cedula, "✔ Contraseña actualizada. Inicie sesión.")
+            self._show_login(user.username, "✔ Contraseña actualizada. Inicia sesión.")
 
         self._submit = submit
         self._button(body, "Cambiar contraseña", "Success.TButton", submit)
-        self._button(body, "Volver", "Ghost.TButton", self._show_login)
+        self._link(body, "← Volver a iniciar sesión", self._show_login).pack(anchor="w", pady=(14, 0))
         answer_entry.focus_set()

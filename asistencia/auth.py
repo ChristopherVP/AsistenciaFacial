@@ -23,11 +23,12 @@ from .validators import (
     name_sort_key,
     normalize_answer,
     normalize_full_name,
+    normalize_username,
     validate_cedula,
     validate_password,
 )
 
-BAD_CREDENTIALS = "Cédula o contraseña incorrecta."
+BAD_CREDENTIALS = "Usuario o contraseña incorrecta."
 
 
 @dataclass(frozen=True)
@@ -41,6 +42,7 @@ class User:
     answer_hash: str
     iterations: int = PBKDF2_ITERATIONS
     remembered: bool = False
+    username: str = ""
 
 
 def _hash_secret(secret: str, salt: bytes, iterations: int) -> str:
@@ -97,7 +99,7 @@ def _user_from_dict(raw: dict) -> User:
     user = User(**{key: value for key, value in raw.items() if key in known})
     bytes.fromhex(user.password_salt)
     bytes.fromhex(user.answer_salt)
-    return user
+    return user if user.username else replace(user, username=user.cedula)
 
 
 class UserRepository:
@@ -117,6 +119,13 @@ class UserRepository:
 
     def get(self, cedula: str) -> User | None:
         return self._users.get(cedula)
+
+    def find_by_username(self, username: str) -> User | None:
+        wanted = username.strip().lower()
+        return next((user for user in self._users.values() if user.username == wanted), None)
+
+    def username_taken(self, username: str) -> bool:
+        return self.find_by_username(username) is not None
 
     def remembered_users(self) -> tuple[User, ...]:
         saved = (user for user in self._users.values() if user.remembered)
@@ -154,6 +163,7 @@ class UserRepository:
         self,
         cedula: str,
         full_name: str,
+        username: str,
         password: str,
         confirmation: str,
         question: str,
@@ -161,17 +171,21 @@ class UserRepository:
     ) -> User:
         valid_cedula = validate_cedula(cedula)
         name = normalize_full_name(full_name)
+        valid_username = normalize_username(username)
         validate_password(password, confirmation)
         if question not in SECURITY_QUESTIONS:
             raise ValidationError("Elija una pregunta de seguridad de la lista.")
         normalized_answer = normalize_answer(answer)
         if valid_cedula in self._users:
             raise ValidationError("Ya existe un usuario con esa cédula.")
+        if self.username_taken(valid_username):
+            raise ValidationError("Ese nombre de usuario ya está en uso. Elija otro.")
         password_salt, password_hash = _protect(password)
         answer_salt, answer_hash = _protect(normalized_answer)
         user = User(
             cedula=valid_cedula,
             full_name=name,
+            username=valid_username,
             password_salt=password_salt,
             password_hash=password_hash,
             question=question,
@@ -181,10 +195,10 @@ class UserRepository:
         self._persist({**self._users, user.cedula: user})
         return user
 
-    def authenticate(self, cedula: str, password: str) -> User:
-        key = f"login:{cedula}"
+    def authenticate(self, username: str, password: str) -> User:
+        key = f"login:{username.strip().lower()}"
         self._throttle.check(key)
-        user = self._users.get(cedula)
+        user = self.find_by_username(username)
         if user is None or not _matches(
             password, user.password_salt, user.password_hash, user.iterations
         ):
@@ -199,20 +213,20 @@ class UserRepository:
             raise AuthError("Este usuario ya no está guardado. Escriba su contraseña.")
         return user
 
-    def security_question(self, cedula: str) -> str:
-        user = self._users.get(cedula)
+    def security_question(self, username: str) -> str:
+        user = self.find_by_username(username)
         if user is None:
-            raise AuthError("No existe un usuario con esa cédula.")
+            raise AuthError("No existe ese usuario.")
         return user.question
 
     def recover_password(
-        self, cedula: str, answer: str, new_password: str, confirmation: str
+        self, username: str, answer: str, new_password: str, confirmation: str
     ) -> User:
-        key = f"recover:{cedula}"
+        key = f"recover:{username.strip().lower()}"
         self._throttle.check(key)
-        user = self._users.get(cedula)
+        user = self.find_by_username(username)
         if user is None:
-            raise AuthError("No existe un usuario con esa cédula.")
+            raise AuthError("No existe ese usuario.")
         normalized_answer = normalize_answer(answer)
         if not _matches(normalized_answer, user.answer_salt, user.answer_hash, user.iterations):
             self._throttle.register_failure(key)
@@ -220,9 +234,9 @@ class UserRepository:
         validate_password(new_password, confirmation)
         salt, password_hash = _protect(new_password, user.iterations)
         updated = replace(user, password_salt=salt, password_hash=password_hash)
-        self._persist({**self._users, cedula: updated})
+        self._persist({**self._users, user.cedula: updated})
         self._throttle.reset(key)
-        self._throttle.reset(f"login:{cedula}")
+        self._throttle.reset(f"login:{user.username}")
         return updated
 
     def set_remembered(self, cedula: str, remembered: bool) -> User:
